@@ -11,12 +11,16 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@700&text=%E5%B8%A5%E4%BB%95%E7%9B%B8%E5%82%8C%E4%BF%A5%E7%82%AE%E5%85%B5%E5%B0%87%E5%A3%AB%E8%B1%A1%E9%A6%AC%E8%BB%8A%E7%A0%B2%E5%8D%92%E6%A5%9A%E6%B2%B3%E6%BC%A2%E7%95%8C&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=2">
+<link rel="stylesheet" href="css/style.css?v=3">
 </head>
 <body>
 <header class="top">
   <div class="brand"><span class="logo">帥</span><div><h1>Cờ Tướng</h1><p>Luyện cùng máy, có thầy chỉ nước</p></div></div>
-  <div class="controls">
+  <nav class="tabs" role="tablist">
+    <button data-mode="play">Đấu với máy</button>
+    <button data-mode="puzzle">Bài tập sát cục</button>
+  </nav>
+  <div class="controls play-only">
     <label>Cấp độ
       <select id="level">
         <option value="1">1 · Mới tập</option>
@@ -48,7 +52,7 @@
       </svg>
       <div class="pieces" id="pieces"></div>
     </div>
-    <div class="evalbar" title="Thế cờ theo đánh giá của máy">
+    <div class="evalbar play-only" title="Thế cờ theo đánh giá của máy">
       <div class="evaltrack"><div class="evalfill" id="evalFill"></div><div class="evalmid"></div></div>
       <span id="evalText">Cân bằng</span>
     </div>
@@ -61,20 +65,30 @@
       <button class="btn" id="undoBtn">↶ Đi lại <kbd>U</kbd></button>
     </div>
     <div class="coach" id="coach" aria-live="polite"></div>
+    <div class="card puzzle-only">
+      <div class="card-h">Bài tập <span class="muted small" id="pzProgress"></span></div>
+      <div class="pz-actions">
+        <button class="btn" data-act="pz-prev">‹ Trước</button>
+        <button class="btn" data-act="pz-solution">Xem lời giải</button>
+        <button class="btn" data-act="pz-next">Sau ›</button>
+      </div>
+      <div id="pzList" class="pzlist"></div>
+    </div>
     <div class="card">
       <div class="card-h">Nước đi <span class="muted small">bấm vào nước để xem lại</span></div>
       <div class="moves" id="moves"></div>
     </div>
     <details class="card settings">
       <summary>Tùy chọn</summary>
-      <label class="tog"><input type="checkbox" id="optWarn"> Hỏi lại khi tôi đi nước hỏng</label>
+      <label class="tog play-only"><input type="checkbox" id="optWarn"> Hỏi lại khi tôi đi nước hỏng</label>
       <label class="tog"><input type="checkbox" id="optThreats"> Viền đỏ quân của tôi đang bị đe dọa</label>
       <label class="tog"><input type="checkbox" id="optHan"> Quân cờ chữ Hán (tắt: chữ Việt X, M, P…)</label>
       <p class="muted small">Ký hiệu nước đi: <b>Quân · cột · tiến/thoái/bình · số</b>. Cột đánh số 1–9 từ phải sang trái theo phía mỗi bên (xem số ở mép bàn cờ). Ví dụ "Pháo 2 bình 5" là Pháo ở cột 2 đi ngang sang cột 5.</p>
     </details>
   </aside>
 </main>
-<script src="js/engine.js?v=2"></script>
-<script src="js/app.js?v=2"></script>
+<script src="js/engine.js?v=3"></script>
+<script src="js/puzzles.js?v=1"></script>
+<script src="js/app.js?v=3"></script>
 </body>
 </html>

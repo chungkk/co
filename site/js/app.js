@@ -70,7 +70,7 @@
   class Engine {
     constructor() { this.spawn(); }
     spawn() {
-      this.w = new Worker('js/worker.js?v=2');
+      this.w = new Worker('js/worker.js?v=3');
       this.q = new Map(); this.id = 0;
       this.w.onmessage = (e) => { const cb = this.q.get(e.data.id); if (cb) { this.q.delete(e.data.id); cb(e.data); } };
     }
@@ -215,6 +215,7 @@
 
   // ---------- Luồng ván cờ ----------
   function save() {
+    if (S.mode === 'puzzle') return;
     store.set('game', { side: S.userSide, moves: S.hist.map((h) => ({ m: h.m, by: h.by, cls: h.cls, coach: h.coach })), hints: S.hintsUsed });
   }
   function newGame(keepSide) {
@@ -590,6 +591,7 @@
     const op = c.opening && (typeof c.opening === 'string' ? { name: c.opening } : c.opening);
     if (op) html += `<div class="opening"><b>Khai cuộc: ${esc(op.name)}</b>${op.tip ? '<br>' + esc(op.tip) : ''}</div>`;
     if (c.confirm) html += `<div class="confirm"><button class="btn primary" data-act="undo-blunder">Đi lại nước này</button><button class="btn" data-act="keep-blunder">Vẫn đi</button></div>`;
+    if (S.mode === 'puzzle') html += puzzleButtons();
     if (S.view >= 0) html += `<div class="confirm"><button class="btn" data-act="exit-view">← Về ván đang chơi</button></div>`;
     el.innerHTML = html;
   }
@@ -619,6 +621,17 @@
 
   function renderStatus() {
     let t;
+    $('undoBtn').innerHTML = S.mode === 'puzzle' ? '↺ Làm lại bài' : '↶ Đi lại <kbd>U</kbd>';
+    document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === S.mode));
+    if (S.mode === 'puzzle') {
+      const left = PZ.cur ? PZ.cur.n - usedMoves() : 0;
+      t = S.view >= 0 ? 'Đang xem lại nước ' + (S.view + 1) : ({ user: 'Bài ' + (PZ.cur && PZ.cur.id) + ': chiếu bí trong ' + left + ' nước', ai: 'Máy đang tìm cách đỡ…', fail: 'Chưa đúng, thử lại nhé', done: 'Đã chiếu bí!', demo: 'Đang xem lời giải…' })[S.state] || '';
+      $('status').textContent = t;
+      $('status').className = 'status' + (S.state === 'ai' || S.state === 'demo' ? ' thinking' : '');
+      $('hintBtn').disabled = !(S.state === 'user' && S.view < 0);
+      $('undoBtn').disabled = S.state === 'ai';
+      return;
+    }
     if (S.view >= 0) t = 'Đang xem lại nước ' + (S.view + 1);
     else if (S.state === 'over') t = S.result.text;
     else if (S.state === 'ai') t = S.coach && S.coach.busy ? 'Thầy đang chấm nước của bạn…' : 'Máy đang nghĩ…';
@@ -631,9 +644,156 @@
   }
 
   function render() {
-    renderPieces(); renderOverlay(); renderCoach(); renderMoves(); renderStatus(); renderEval();
+    renderPieces(); renderOverlay(); renderCoach(); renderMoves(); renderStatus(); if (S.mode !== 'puzzle') renderEval(); renderPuzzle();
     $('level').value = S.level; $('side').value = S.userSide;
     $('optWarn').checked = S.opt.warn; $('optThreats').checked = S.opt.threats; $('optHan').checked = S.opt.han;
+  }
+
+
+  // ---------- Bài tập sát cục ----------
+  const PUZ = self.PUZZLES || [];
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const THEME_INFO = {
+    'Mã hậu pháo': 'Mã đứng trước làm ngòi cho Pháo phía sau, đồng thời khống chế các ô cạnh Tướng. Một trong những đòn sát kinh điển nhất.',
+    'Trùng pháo': 'Hai Pháo xếp chồng trên một đường: Pháo trước làm ngòi cho Pháo sau. Tướng chạy dọc đường vẫn bị chiếu.',
+    'Bạch diện tướng': 'Lợi dụng luật lộ mặt tướng: Tướng mình khống chế cả cột, Tướng đối phương không thể bước sang.',
+    'Pháo đáy': 'Pháo xuống hàng đáy, dùng chính Sĩ/Tượng đối phương làm ngòi, Tướng bị kẹt trong cung.',
+    'Song chiếu': 'Một nước tạo ra hai đường chiếu cùng lúc: không thể vừa chặn vừa ăn.',
+    'Thí quân': 'Hy sinh quân để mở đường chiếu bí. Phải tính đến cùng mới dám đi!',
+    'Xe Mã': 'Xe và Mã phối hợp: Mã khống chế ô thoát, Xe chiếu hết (hoặc ngược lại).',
+    'Mã Pháo': 'Mã và Pháo phối hợp vây Tướng.',
+    'Tốt sát': 'Tốt qua sông áp sát cung, một Tốt cũng có thể kết liễu ván cờ.',
+    'Song xe': 'Hai Xe thay nhau chiếu, dồn Tướng vào đường cùng.',
+    'Mã sát': 'Mã chiếu bí: chú ý chân mã và các ô Mã khống chế.',
+    'Pháo mượn ngòi': 'Pháo dùng quân của đối phương làm ngòi để chiếu.',
+    'Pháo sát': 'Pháo chiếu bí nhờ một quân làm ngòi.',
+    'Xe sát': 'Xe chiếu hết: tìm hàng hoặc cột then chốt để Xe chiếm.',
+  };
+  const PZ = { idx: 0, cur: null, solved: new Set(store.get('solved', [])), fails: 0, hintStep: 0 };
+  const usedMoves = () => S.hist.filter((h) => h.by === 'user').length;
+
+  function setMode(mode) {
+    if (S.mode === mode) return;
+    S.tok++; engine.reset();
+    S.mode = mode; document.body.dataset.mode = mode; store.set('mode', mode);
+    S.view = -1; S.arrows = []; S.selected = -1; S.result = null;
+    if (mode === 'puzzle') { S.userSide = RED; loadPuzzle(store.get('pzIdx', 0)); }
+    else { S.userSide = store.get('side', RED); if (!restore()) newGame(); }
+  }
+  function loadPuzzle(i) {
+    if (!PUZ.length) return;
+    S.tok++;
+    i = Math.max(0, Math.min(PUZ.length - 1, i)); PZ.idx = i; PZ.cur = PUZ[i]; store.set('pzIdx', i);
+    PZ.hintStep = 0; PZ.fails = 0;
+    S.pos = Pos.fromFen(PZ.cur.fen); S.hist = []; S.arrows = []; S.selected = -1; S.view = -1; S.state = 'user'; S.result = null;
+    S.coach = { title: 'Bài ' + PZ.cur.id + ' · ' + PZ.cur.theme, cls: null, lines: [
+      'Đỏ đi trước, chiếu bí trong ' + PZ.cur.n + ' nước. Máy sẽ chống đỡ bằng nước tốt nhất.',
+      THEME_INFO[PZ.cur.theme] || '',
+      PZ.cur.themes.length > 1 ? 'Từ khóa: ' + PZ.cur.themes.join(', ') : '',
+    ].filter(Boolean) };
+    render();
+    const el = document.querySelector('.pz.cur'); if (el) el.scrollIntoView({ block: 'nearest' });
+  }
+  async function onPuzzleMove(m) {
+    const tok = S.tok, before = S.pos.clone(), name = S.pos.moveName(m);
+    S.pos.make(m); S.hist.push({ m, name, by: 'user', before });
+    S.selected = -1; S.arrows = []; S.state = 'ai';
+    S.coach = { title: 'Máy đang tìm cách đỡ…', cls: null, lines: [], busy: true };
+    render();
+    const left = PZ.cur.n - usedMoves();
+    if (S.pos.legalMoves().length === 0) return puzzleSolved();
+    if (left <= 0) return puzzleFail(null, 'Đã hết ' + PZ.cur.n + ' nước mà chưa chiếu bí được.');
+    const r = await engine.search(S.pos.clone(), { depth: 2 * left + 2, timeMs: 3000, multipv: 1 });
+    if (tok !== S.tok || !r) return;
+    const best = r.multi[0];
+    if (best.score <= -MATE + 2 * left) {
+      await sleep(350); if (tok !== S.tok) return;
+      const b2 = S.pos.clone(), rn = S.pos.moveName(best.move);
+      S.pos.make(best.move); S.hist.push({ m: best.move, name: rn, by: 'ai', before: b2 });
+      S.state = 'user'; PZ.hintStep = 0;
+      S.coach = { title: '✓ Đúng rồi: ' + name, cls: 'good', lines: explain(before, m, undefined, { short: true }).concat(['Đối phương đỡ: ' + rn + '. Còn ' + left + ' nước nữa để chiếu bí.']) };
+      render();
+    } else puzzleFail(best.move, null);
+  }
+  function puzzleFail(reply, msg) {
+    PZ.fails++;
+    const h = S.hist[S.hist.length - 1], lines = [];
+    if (msg) lines.push(msg);
+    if (reply) { lines.push('Đối phương thoát được bằng ' + S.pos.moveName(reply) + ' (mũi tên cam).'); S.arrows = [{ m: reply, kind: 'bad' }]; }
+    lines.push('Bấm "Thử lại" để đi lại nước này, hoặc "Gợi ý" sau khi thử lại.');
+    S.state = 'fail';
+    S.coach = { title: '✗ Chưa đúng: ' + h.name, cls: 'mistake', lines };
+    render();
+  }
+  function retryPuzzle() {
+    let i = S.hist.length - 1;
+    while (i >= 0 && S.hist[i].by !== 'user') i--;
+    if (i < 0) return loadPuzzle(PZ.idx);
+    S.tok++;
+    S.pos = S.hist[i].before.clone(); S.hist = S.hist.slice(0, i);
+    S.arrows = []; S.selected = -1; S.state = 'user';
+    S.coach = { title: 'Thử lại', cls: null, lines: ['Còn ' + (PZ.cur.n - usedMoves()) + ' nước để chiếu bí. Hãy tìm nước chiếu mà đối phương không thoát được.'] };
+    render();
+  }
+  function puzzleSolved() {
+    S.state = 'done'; S.arrows = [];
+    PZ.solved.add(PZ.cur.id); store.set('solved', [...PZ.solved]);
+    S.coach = { title: '🎉 Chiếu bí! Xong bài ' + PZ.cur.id, cls: 'best', lines: [
+      PZ.fails ? 'Bạn giải được sau ' + PZ.fails + ' lần thử sai.' : 'Giải đúng ngay lần đầu!',
+      'Các nước: ' + S.hist.map((h) => h.name).join(' → '),
+      'Đòn: ' + PZ.cur.theme + '. ' + (THEME_INFO[PZ.cur.theme] || ''),
+    ] };
+    render();
+  }
+  async function puzzleHint() {
+    if (S.state !== 'user') return;
+    const tok = S.tok, left = PZ.cur.n - usedMoves();
+    S.coach = { title: 'Đang tìm…', cls: null, lines: [], busy: true }; render();
+    const r = await engine.search(S.pos.clone(), { depth: 2 * left + 1, timeMs: 3000, multipv: 1 });
+    if (tok !== S.tok || !r) return;
+    // ưu tiên đúng đường lời giải gốc (để khớp với tên đòn) nếu người chơi đang đi theo nó
+    const onSol = S.hist.every((h, i) => h.m === PZ.cur.sol[i]) && PZ.cur.sol[S.hist.length] !== undefined;
+    const m = onSol ? PZ.cur.sol[S.hist.length] : r.multi[0].move; PZ.hintStep++;
+    if (PZ.hintStep === 1) {
+      S.selected = m & 127;
+      S.coach = { title: '💡 Gợi ý 1', cls: null, lines: ['Quân cần đi: ' + nameOf(S.pos.b[m & 127]) + ' (đang được chọn sẵn).', 'Bấm Gợi ý lần nữa để xem nước cụ thể.'] };
+    } else {
+      S.arrows = [{ m, kind: 'best' }];
+      S.coach = { title: '💡 Gợi ý 2', cls: null, lines: ['Nước đúng: ' + S.pos.moveName(m) + '.'].concat(explain(S.pos, m, r.multi[0].score, { short: true })) };
+    }
+    render();
+  }
+  async function showSolution() {
+    const tok = ++S.tok;
+    S.pos = Pos.fromFen(PZ.cur.fen); S.hist = []; S.arrows = []; S.selected = -1; S.view = -1; S.state = 'demo';
+    S.coach = { title: 'Lời giải bài ' + PZ.cur.id + ' · ' + PZ.cur.theme, cls: null, lines: [] };
+    render();
+    for (const m of PZ.cur.sol) {
+      await sleep(1000); if (tok !== S.tok) return;
+      const b = S.pos.clone(), nm = S.pos.moveName(m);
+      S.coach.lines.push((b.side === RED ? 'Đỏ: ' : 'Đen: ') + nm);
+      S.pos.make(m); S.hist.push({ m, name: nm, by: b.side === RED ? 'user' : 'ai', before: b });
+      render();
+    }
+    S.state = 'done'; S.coach.lines.push('Chiếu bí! ' + (THEME_INFO[PZ.cur.theme] || ''));
+    render();
+  }
+  function renderPuzzle() {
+    if (S.mode !== 'puzzle') return;
+    $('pzProgress').textContent = 'Đã giải ' + PZ.solved.size + '/' + PUZ.length;
+    const groups = [1, 2, 3].map((n) => {
+      const items = PUZ.map((p, i) => [p, i]).filter(([p]) => p.n === n);
+      return `<div class="pzg"><div class="pzg-h">Chiếu bí ${n} nước</div><div class="pzgrid">` +
+        items.map(([p, i]) => `<button class="pz${PZ.solved.has(p.id) ? ' ok' : ''}${i === PZ.idx ? ' cur' : ''}" data-pz="${i}" title="${esc(p.theme)}">${p.id}</button>`).join('') + '</div></div>';
+    });
+    $('pzList').innerHTML = groups.join('');
+  }
+  function puzzleButtons() {
+    if (S.view >= 0) return '';
+    let b = '';
+    if (S.state === 'fail') b += '<button class="btn primary" data-act="pz-retry">Thử lại</button>';
+    if (S.state === 'done') b += '<button class="btn primary" data-act="pz-next">Bài tiếp theo →</button><button class="btn" data-act="pz-restart">Làm lại bài này</button>';
+    return b ? '<div class="confirm">' + b + '</div>' : '';
   }
 
   // ---------- Sự kiện ----------
@@ -652,27 +812,34 @@
     const p = S.pos.b[sq];
     if (S.selected >= 0) {
       const m = S.selected | (sq << 7);
-      if (S.pos.isLegal(m)) { onUserMove(m); return; }
+      if (S.pos.isLegal(m)) { if (S.mode === 'puzzle') onPuzzleMove(m); else onUserMove(m); return; }
     }
     if (p && sgn(p) === S.userSide) S.selected = sq === S.selected ? -1 : sq;
     else S.selected = -1;
     renderPieces(); renderOverlay();
   });
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-act],[data-view]');
+    const t = e.target.closest('[data-act],[data-view],[data-pz],[data-mode]');
     if (!t) return;
     if (t.dataset.view != null) {
       const i = +t.dataset.view;
       if (S.state === 'ai') return;
       S.view = S.view === i ? -1 : i; render(); return;
     }
+    if (t.dataset.pz != null) { loadPuzzle(+t.dataset.pz); return; }
+    if (t.dataset.mode) { setMode(t.dataset.mode); return; }
     const a = t.dataset.act;
-    if (a === 'undo-blunder') confirmBlunder(true);
+    if (a === 'pz-retry') retryPuzzle();
+    else if (a === 'pz-next') loadPuzzle(PZ.idx + 1 < PUZ.length ? PZ.idx + 1 : 0);
+    else if (a === 'pz-prev') loadPuzzle(PZ.idx - 1);
+    else if (a === 'pz-restart') loadPuzzle(PZ.idx);
+    else if (a === 'pz-solution') showSolution();
+    else if (a === 'undo-blunder') confirmBlunder(true);
     else if (a === 'keep-blunder') confirmBlunder(false);
     else if (a === 'exit-view') { S.view = -1; render(); }
   });
-  $('hintBtn').onclick = showHint;
-  $('undoBtn').onclick = undo;
+  $('hintBtn').onclick = () => (S.mode === 'puzzle' ? puzzleHint() : showHint());
+  $('undoBtn').onclick = () => (S.mode === 'puzzle' ? loadPuzzle(PZ.idx) : undo());
   $('newBtn').onclick = () => { if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi và bắt đầu ván mới?')) return; newGame(true); };
   $('level').onchange = (e) => { S.level = +e.target.value; store.set('level', S.level); };
   $('side').onchange = (e) => {
@@ -686,12 +853,15 @@
   ['optWarn', 'optThreats', 'optHan'].forEach((id) => ($(id).onchange = optChange));
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
-    if (e.key === 'h' || e.key === 'H') showHint();
-    else if (e.key === 'u' || e.key === 'U' || (e.key === 'z' && (e.metaKey || e.ctrlKey))) undo();
+    if (e.key === 'h' || e.key === 'H') $('hintBtn').click();
+    else if (e.key === 'u' || e.key === 'U' || (e.key === 'z' && (e.metaKey || e.ctrlKey))) $('undoBtn').click();
     else if (e.key === 'Escape') { S.selected = -1; S.view = -1; render(); }
   });
 
   // ---------- Khởi động ----------
   drawGrid();
-  if (!restore()) newGame();
+  S.mode = store.get('mode', 'play') === 'puzzle' && PUZ.length ? 'puzzle' : 'play';
+  document.body.dataset.mode = S.mode;
+  if (S.mode === 'puzzle') { S.userSide = RED; loadPuzzle(store.get('pzIdx', 0)); }
+  else if (!restore()) newGame();
 })();

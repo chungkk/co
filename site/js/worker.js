@@ -1,4 +1,4 @@
-importScripts('engine.js?v=1');
+importScripts('engine.js?v=3');
 const searcher = new XQ.Search();
 onmessage = (e) => {
   const { id, fen, hist, opts } = e.data;

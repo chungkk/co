@@ -7,3 +7,6 @@ Web tĩnh (HTML/CSS/JS thuần), deploy tại https://co.chungkk.com qua Coolify
 - `site/js/app.js`: giao diện, gợi ý, chấm điểm, sách khai cuộc
 
 Chạy thử: `cd site && python3 -m http.server 8765`
+
+## Bài tập sát cục
+`tools/`: đào thế cờ từ ván máy tự đánh (`node mine.js <seed> <số ván>`), phân loại đòn (`classify.js`), chọn bộ bài (`select.js` → `site/js/puzzles.js`). Chạy trong thư mục `tools/`.

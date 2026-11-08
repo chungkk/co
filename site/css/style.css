@@ -191,3 +191,19 @@ select {
   .board { border-radius: 10px; }
   .piece span::after { border-width: 1.5px; }
 }
+
+/* ---------- Chế độ ---------- */
+body[data-mode="puzzle"] .play-only, body:not([data-mode="puzzle"]) .puzzle-only { display: none !important; }
+.tabs { display: flex; gap: 4px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 12px; padding: 4px; }
+.tabs button { border: 0; background: none; padding: 8px 14px; border-radius: 9px; cursor: pointer; font-weight: 600; color: var(--muted); min-height: 36px; }
+.tabs button.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+.pz-actions { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 6px; margin-bottom: 8px; }
+.pz-actions .btn { padding: 6px 8px; font-size: 13.5px; }
+.pzlist { max-height: 300px; overflow-y: auto; }
+.pzg-h { font-size: 12px; color: var(--muted); font-weight: 600; margin: 6px 0 4px; text-transform: uppercase; letter-spacing: .04em; }
+.pzgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 5px; }
+.pz { border: 1px solid var(--line); background: var(--surface-2); border-radius: 8px; min-height: 34px; cursor: pointer; font-weight: 600; font-size: 13px; }
+.pz:hover { border-color: var(--muted); }
+.pz.ok { background: var(--c-best); border-color: var(--c-best); color: #fff; }
+.pz.cur { outline: 2.5px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 520px) { .tabs { width: 100%; } .tabs button { flex: 1; } }
