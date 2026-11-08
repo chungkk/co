@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cờ Tướng: luyện cùng máy</title>
+<meta name="description" content="Chơi cờ tướng với máy, có thầy gợi ý nước đi, giải thích lý do và chấm điểm từng nước để bạn tiến bộ.">
+<meta name="theme-color" content="#7a2e1f">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='29' fill='%23f6e6c4' stroke='%23b3261e' stroke-width='5'/%3E%3Ctext x='32' y='44' font-size='34' text-anchor='middle' fill='%23b3261e' font-family='serif' font-weight='700'%3E帥%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@700&text=%E5%B8%A5%E4%BB%95%E7%9B%B8%E5%82%8C%E4%BF%A5%E7%82%AE%E5%85%B5%E5%B0%87%E5%A3%AB%E8%B1%A1%E9%A6%AC%E8%BB%8A%E7%A0%B2%E5%8D%92%E6%A5%9A%E6%B2%B3%E6%BC%A2%E7%95%8C&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css?v=2">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">帥</span><div><h1>Cờ Tướng</h1><p>Luyện cùng máy, có thầy chỉ nước</p></div></div>
+  <div class="controls">
+    <label>Cấp độ
+      <select id="level">
+        <option value="1">1 · Mới tập</option>
+        <option value="2">2 · Dễ</option>
+        <option value="3">3 · Trung bình</option>
+        <option value="4">4 · Khá</option>
+        <option value="5">5 · Giỏi</option>
+      </select>
+    </label>
+    <label>Cầm quân
+      <select id="side"><option value="1">Đỏ (đi trước)</option><option value="-1">Đen</option></select>
+    </label>
+    <button class="btn" id="newBtn">Ván mới</button>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="board-col">
+    <div class="board" id="board">
+      <svg class="grid" id="grid" viewBox="0 0 900 1100" aria-hidden="true"></svg>
+      <svg class="marks" viewBox="0 0 900 1100" aria-hidden="true">
+        <defs>
+          <marker id="ah-best" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahead best"/></marker>
+          <marker id="ah-alt" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahead alt"/></marker>
+          <marker id="ah-bad" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahead bad"/></marker>
+          <marker id="ah-played" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="3.2" markerHeight="3.2" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ahead played"/></marker>
+        </defs>
+        <g id="marks"></g>
+      </svg>
+      <div class="pieces" id="pieces"></div>
+    </div>
+    <div class="evalbar" title="Thế cờ theo đánh giá của máy">
+      <div class="evaltrack"><div class="evalfill" id="evalFill"></div><div class="evalmid"></div></div>
+      <span id="evalText">Cân bằng</span>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <div class="status" id="status">Đến lượt bạn</div>
+    <div class="actions">
+      <button class="btn primary" id="hintBtn"><span>💡</span> Gợi ý <kbd>H</kbd></button>
+      <button class="btn" id="undoBtn">↶ Đi lại <kbd>U</kbd></button>
+    </div>
+    <div class="coach" id="coach" aria-live="polite"></div>
+    <div class="card">
+      <div class="card-h">Nước đi <span class="muted small">bấm vào nước để xem lại</span></div>
+      <div class="moves" id="moves"></div>
+    </div>
+    <details class="card settings">
+      <summary>Tùy chọn</summary>
+      <label class="tog"><input type="checkbox" id="optWarn"> Hỏi lại khi tôi đi nước hỏng</label>
+      <label class="tog"><input type="checkbox" id="optThreats"> Viền đỏ quân của tôi đang bị đe dọa</label>
+      <label class="tog"><input type="checkbox" id="optHan"> Quân cờ chữ Hán (tắt: chữ Việt X, M, P…)</label>
+      <p class="muted small">Ký hiệu nước đi: <b>Quân · cột · tiến/thoái/bình · số</b>. Cột đánh số 1–9 từ phải sang trái theo phía mỗi bên (xem số ở mép bàn cờ). Ví dụ "Pháo 2 bình 5" là Pháo ở cột 2 đi ngang sang cột 5.</p>
+    </details>
+  </aside>
+</main>
+<script src="js/engine.js?v=2"></script>
+<script src="js/app.js?v=2"></script>
+</body>
+</html>
