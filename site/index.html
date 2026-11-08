@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@700&text=%E5%B8%A5%E4%BB%95%E7%9B%B8%E5%82%8C%E4%BF%A5%E7%82%AE%E5%85%B5%E5%B0%87%E5%A3%AB%E8%B1%A1%E9%A6%AC%E8%BB%8A%E7%A0%B2%E5%8D%92%E6%A5%9A%E6%B2%B3%E6%BC%A2%E7%95%8C&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=3">
+<link rel="stylesheet" href="css/style.css?v=5">
 </head>
 <body>
 <header class="top">
@@ -19,6 +19,7 @@
   <nav class="tabs" role="tablist">
     <button data-mode="play">Đấu với máy</button>
     <button data-mode="puzzle">Bài tập sát cục</button>
+    <button data-mode="games">Ván đại sư</button>
   </nav>
   <div class="controls play-only">
     <label>Cấp độ
@@ -65,14 +66,31 @@
       <button class="btn" id="undoBtn">↶ Đi lại <kbd>U</kbd></button>
     </div>
     <div class="coach" id="coach" aria-live="polite"></div>
+    <div class="card play-only">
+      <div class="card-h">Khai cuộc đại sư <span class="muted small">từ 104.186 ván giải đấu</span></div>
+      <div id="pro"></div>
+    </div>
     <div class="card puzzle-only">
       <div class="card-h">Bài tập <span class="muted small" id="pzProgress"></span></div>
+      <select id="pzCol" class="full" aria-label="Bộ bài tập"></select>
       <div class="pz-actions">
         <button class="btn" data-act="pz-prev">‹ Trước</button>
         <button class="btn" data-act="pz-solution">Xem lời giải</button>
         <button class="btn" data-act="pz-next">Sau ›</button>
       </div>
       <div id="pzList" class="pzlist"></div>
+    </div>
+    <div class="card games-only">
+      <div class="card-h">Ván đại sư <span class="muted small" id="gmPly"></span></div>
+      <select id="gmCol" class="full" aria-label="Bộ sưu tập"></select>
+      <div class="gm-actions">
+        <button class="btn" data-act="gm-first" title="Về đầu ván">⏮</button>
+        <button class="btn" id="gmGuess" data-act="gm-guess">Luyện đoán nước</button>
+        <button class="btn" data-act="gm-side" title="Đổi bên đoán">⇄ Bên</button>
+        <button class="btn" data-act="gm-last" title="Cuối ván">⏭</button>
+      </div>
+      <input id="gmFilter" class="full" type="search" placeholder="Tìm theo tên kỳ thủ, khai cuộc…">
+      <div id="gmList" class="gmlist"></div>
     </div>
     <div class="card">
       <div class="card-h">Nước đi <span class="muted small">bấm vào nước để xem lại</span></div>
@@ -87,8 +105,11 @@
     </details>
   </aside>
 </main>
+<footer class="credits">
+  Dữ liệu ván cờ, cờ thế: <a href="https://github.com/chasoft/community-xiangqi-games-database" target="_blank" rel="noopener">kho cộng đồng của vietcotuong.com</a> (nguồn gốc dpxq.com và các sách cờ). Bộ 68 Sát pháp cơ bản: Jim Png Hau Cheng (xqinenglish.com). Tên ván, tên kỳ thủ được phiên âm Hán-Việt tự động.
+</footer>
 <script src="js/engine.js?v=3"></script>
 <script src="js/puzzles.js?v=1"></script>
-<script src="js/app.js?v=3"></script>
+<script src="js/app.js?v=5"></script>
 </body>
 </html>
