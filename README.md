@@ -12,7 +12,7 @@ Chạy thử: `cd site && python3 -m http.server 8765`
 `tools/`: đào thế cờ từ ván máy tự đánh (`node mine.js <seed> <số ván>`), phân loại đòn (`classify.js`), chọn bộ bài (`select.js` → `site/js/puzzles.js`). Chạy trong thư mục `tools/`.
 
 ## Dữ liệu chuyên nghiệp (`site/data/`)
-Nguồn: [chasoft/community-xiangqi-games-database](https://github.com/chasoft/community-xiangqi-games-database) (định dạng DhtmlXQ), tải về `~/Code/co-tuong-data/src` (sparse clone: puzzles, end-games, selected-games, tournaments).
+Nguồn: [chasoft/community-xiangqi-games-database](https://github.com/chasoft/community-xiangqi-games-database) (định dạng DhtmlXQ), tải về `data-src/src` (sparse clone: puzzles, end-games, selected-games, tournaments).
 - `tools/dhtml.js`: đọc file DhtmlXQ, phát lại và kiểm tra nước đi.
 - `tools/hanviet.js`: phiên âm Hán-Việt (tên kỳ thủ, khai cuộc ECCO, tên thế cờ).
 - `node build-book.js <data/tournaments>` → `data/book.json`: sách khai cuộc từ ~104k ván giải đấu (24 nửa nước đầu).

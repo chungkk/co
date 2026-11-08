@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const D = require('./dhtml.js');
 const { hv, hasUnknown } = require('./hanviet.js');
-const BASE = process.env.HOME + '/Code/co-tuong-data/src/data/selected-games/';
+const BASE = require('path').join(__dirname, '../data-src/') + 'src/data/selected-games/';
 const ECO = JSON.parse(fs.readFileSync('../site/data/book.json')).names;
 const RES = { '红胜': 1, '和局': 0, '黑胜': -1 };
 const slug = (s) => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/đ/g, 'd').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');

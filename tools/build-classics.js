@@ -5,7 +5,7 @@ const D = require('./dhtml.js');
 const { hv } = require('./hanviet.js');
 const { themeOf } = require('./theme.js');
 const { Pos, Search, MATE } = globalThis.XQ;
-const BASE = process.env.HOME + '/Code/co-tuong-data/src/data/';
+const BASE = require('path').join(__dirname, '../data-src/') + 'src/data/';
 
 const COLS = {
   'sat-phap-68': { dir: 'puzzles/68-Sat-Phap-Co-Ban', title: '68 Sát pháp cơ bản', source: 'Jim Png Hau Cheng (xqinenglish.com)', named: false, maxPly: 13, cap: 80, comments: true },
