@@ -310,6 +310,202 @@ class GameController extends ChangeNotifier {
     return old == null ? null : OpeningInfo(old.name, old.tip);
   }
 
+  // ---------- Luyện khai cuộc theo cây nước đại sư ----------
+  /// Các khai cuộc có thể chọn để luyện: "tự do" + mỗi tên trong [openings] một lần
+  static final drillOps = <Opening>[
+    const Opening([], 'Tự do (theo đại sư)', null),
+    for (var i = 0; i < openings.length; i++)
+      if (openings.indexWhere((x) => x.name == openings[i].name) == i) openings[i],
+  ];
+  static const drillMin = 20; // thế cờ có ít hơn số ván này coi như đã ra khỏi sách
+
+  /// Đang luyện khai cuộc (null = ván thường)
+  ({String name, int ok, int tot, int fails})? drill;
+
+  /// Khai cuộc đang chọn để luyện (chỉ số trong [drillOps])
+  int drillOp = 0;
+  void setDrillOp(int k) {
+    drillOp = k;
+    _render();
+  }
+
+  int _bookTot(List<BookMove>? pm) => pm == null ? 0 : pm.fold<int>(0, (s, x) => s + x.n);
+
+  /// Nước chấp nhận được: ≥10% số ván, hoặc nằm trong top 3 và ≥3%
+  ({BookMove x, int rank, BookMove top})? _drillAccept(List<BookMove> pm, int m) {
+    final sorted = [...pm]..sort((a, b) => b.n.compareTo(a.n));
+    final rank = sorted.indexWhere((y) => y.m == m);
+    if (rank < 0) return null;
+    final x = sorted[rank];
+    return x.share >= 0.1 || (rank < 3 && x.share >= 0.03) ? (x: x, rank: rank, top: sorted[0]) : null;
+  }
+
+  void startDrill(int k) {
+    if (pro == null) return;
+    final op = drillOps[k.clamp(0, drillOps.length - 1)];
+    tok++;
+    engine.reset();
+    pos = Pos.start();
+    hist = [];
+    selected = -1;
+    arrows = [];
+    view = -1;
+    result = null;
+    hintsUsed = 0;
+    lastScore = 0;
+    moveSerial++;
+    for (final nm in op.seq) {
+      final m = pos.legalMoves().where((x) => pos.moveName(x) == nm).firstOrNull;
+      if (m == null) break;
+      final before = pos.clone();
+      pos.make(m);
+      hist.add(HistEntry(m, nm, before.side == userSide ? 'user' : 'ai', before));
+    }
+    drill = (name: op.name, ok: 0, tot: 0, fails: 0);
+    coach = Coach(
+      '📖 Luyện khai cuộc: ${op.name}',
+      lines: [
+        'Bạn cầm ${sideName(userSide)}. Máy đi theo các nước đại sư hay chơi; bạn hãy đáp bằng nước phổ biến (≥10% số ván, hoặc nằm trong top 3).',
+        'Đi nước hiếm hoặc ngoài sách sẽ được đi lại. Bấm "Gợi ý" để xem đại sư thường đi gì.',
+        if (op.tip != null) '${op.name}: ${op.tip}',
+      ],
+    );
+    _save();
+    _drillNext();
+  }
+
+  void stopDrill() {
+    tok++;
+    drill = null;
+    arrows = [];
+    coach = Coach('Đã dừng luyện khai cuộc', lines: ['Ván tiếp tục như đấu thường: máy đánh theo cấp độ đã chọn, thầy chấm từng nước.']);
+    _continueGame();
+  }
+
+  void _continueGame() {
+    if (_checkOver()) return;
+    if (pos.side == userSide) {
+      _startUserTurn();
+    } else {
+      _aiTurn();
+    }
+  }
+
+  void _drillNext() {
+    final pm = proMoves(pos);
+    if (_bookTot(pm) < drillMin) return _drillEnd();
+    if (pos.side == userSide) {
+      state = 'user';
+      selected = -1;
+      drill = (name: drill!.name, ok: drill!.ok, tot: drill!.tot, fails: 0);
+      _render();
+    } else {
+      _drillReply(pm!);
+    }
+  }
+
+  Future<void> _drillReply(List<BookMove> pm) async {
+    final t = tok;
+    state = 'ai';
+    _render();
+    await Future.delayed(const Duration(milliseconds: 450));
+    if (t != tok || drill == null) return;
+    // chọn theo tần suất đại sư, bỏ các nước quá hiếm
+    final pool = pm.where((x) => x.n >= 3 && x.share >= 0.03).toList();
+    final ws = pool.isNotEmpty ? pool : pm;
+    var r0 = _rnd.nextDouble() * ws.fold<int>(0, (s, x) => s + x.n);
+    var pick = ws.last;
+    for (final x in ws) {
+      r0 -= x.n;
+      if (r0 <= 0) {
+        pick = x;
+        break;
+      }
+    }
+    final before = pos.clone(), name = pos.moveName(pick.m), capture = pos.b[pick.m >> 7] != 0;
+    pos.make(pick.m);
+    _moved(pos, pick.m, capture);
+    hist.add(HistEntry(pick.m, name, 'ai', before));
+    if (coach != null && !coach!.busy) coach!.lines.add('Máy đáp: $name (${pct(pick.share)} số ván đại sư).');
+    _save();
+    _drillNext();
+  }
+
+  void _onDrillMove(int m) {
+    final pm = proMoves(pos) ?? const <BookMove>[], name = pos.moveName(m), d = drill!;
+    final ok = _drillAccept(pm, m);
+    if (ok == null) {
+      drill = (name: d.name, ok: d.ok, tot: d.tot, fails: d.fails + 1);
+      final y = pm.where((z) => z.m == m).firstOrNull;
+      final lines = [
+        y != null
+            ? '$name chỉ có ${fmtInt(y.n)} ván (${pct(y.share)}): đại sư ít chọn nước này.'
+            : '$name không có trong ván đại sư nào ở thế cờ này.',
+      ];
+      if (drill!.fails >= 2) {
+        lines.add('Đại sư thường đi: ${proLine(pm, 3)}. Mũi tên xanh là nước chính.');
+        arrows = [for (var i = 0; i < pm.length && i < 3; i++) Arrow(pm[i].m, i == 0 ? 'best' : 'alt')];
+      } else {
+        lines.add('Hãy thử lại. Bấm "Gợi ý" nếu chưa nhớ.');
+        arrows = [Arrow(m, 'bad')];
+      }
+      _fx('fail');
+      coach = Coach('✗ $name: ${y != null ? 'nước hiếm' : 'ngoài sách'}', cls: 'mistake', lines: lines);
+      selected = -1;
+      _render();
+      return;
+    }
+    drill = (name: d.name, ok: d.ok + (d.fails == 0 ? 1 : 0), tot: d.tot + 1, fails: d.fails);
+    final x = ok.x, rank = ok.rank;
+    final before = pos.clone(), capture = pos.b[m >> 7] != 0;
+    pos.make(m);
+    _moved(pos, m, capture);
+    final lines = [
+      '${rank == 0 ? 'Nước chính' : 'Nước phổ biến'}: ${fmtInt(x.n)} ván đại sư (${pct(x.share)}), bên đi thắng ${pct(x.w / x.n)}, hòa ${pct(x.d / x.n)}.',
+      if (rank > 0) 'Nước chính ở thế này: ${ok.top.name} (${pct(ok.top.share)}).',
+      if (d.fails > 0) '(Đúng sau ${d.fails} lần thử.)',
+    ];
+    final c = rank == 0 ? 'best' : 'book';
+    final co = Coach('${rank == 0 ? '★' : '📖'} $name: nước của đại sư', cls: c, lines: lines);
+    hist.add(
+      HistEntry(m, name, 'user', before, cls: d.fails > 0 ? 'inacc' : c, coach: SavedCoach(co.title, co.cls, lines, null)),
+    );
+    coach = co;
+    arrows = [];
+    _save();
+    _render();
+    _drillNext();
+  }
+
+  void _drillHint() {
+    final pm = proMoves(pos) ?? const <BookMove>[];
+    hintsUsed++;
+    final d = drill!;
+    drill = (name: d.name, ok: d.ok, tot: d.tot, fails: math.max(d.fails, 1));
+    arrows = [for (var i = 0; i < pm.length && i < 3; i++) Arrow(pm[i].m, i == 0 ? 'best' : 'alt')];
+    coach = Coach(
+      '💡 Đại sư thường đi',
+      lines: ['${proLine(pm, 3)}.', 'Mũi tên xanh là nước chính, mũi tên vàng là các nước phổ biến khác.'],
+    );
+    _render();
+  }
+
+  void _drillEnd() {
+    final d = drill!;
+    drill = null;
+    final e = _ecoOf();
+    coach = Coach(
+      '🏁 Hết sách khai cuộc: ${d.name}',
+      lines: [
+        'Thế cờ đã ra khỏi sách (ít hơn $drillMin ván đại sư).',
+        if (d.tot > 0) 'Bạn đi đúng ngay lần đầu ${d.ok}/${d.tot} nước (${pct(d.ok / d.tot)}).',
+        if (e != null) 'Thế trận: ${e.name}.',
+        'Ván tiếp tục: từ đây máy đánh theo cấp độ đã chọn và thầy chấm từng nước như bình thường. Bấm "Luyện khai cuộc" để luyện lại.',
+      ],
+    );
+    _continueGame();
+  }
+
   // ---------- Luồng ván cờ ----------
   void _save() {
     if (mode != Mode.play) return;
@@ -325,6 +521,7 @@ class GameController extends ChangeNotifier {
   void newGame({bool keepSide = false}) {
     tok++;
     engine.reset();
+    drill = null;
     if (!keepSide) userSide = store.get<int>('side', RED);
     pos = Pos.start();
     hist = [];
@@ -353,6 +550,7 @@ class GameController extends ChangeNotifier {
 
   bool _restore() {
     final g = store.get<Map<String, dynamic>?>('game', null);
+    drill = null;
     if (g == null || g['moves'] == null || (g['moves'] as List).isEmpty) return false;
     try {
       userSide = g['side'] as int;
@@ -736,6 +934,10 @@ class GameController extends ChangeNotifier {
     arrows = [];
     coach = Coach('Đã đi lại', lines: ['Hãy thử một nước khác.']);
     _save();
+    if (drill != null) {
+      _render();
+      return _drillNext();
+    }
     _startUserTurn();
   }
 
@@ -766,6 +968,8 @@ class GameController extends ChangeNotifier {
     } else if (mode == Mode.games) {
       if (state == 'reveal') coach?.gmNext = false;
       gmGoto(gmPly + 1);
+    } else if (drill != null) {
+      _drillHint();
     } else {
       _showHint();
     }
@@ -811,8 +1015,10 @@ class GameController extends ChangeNotifier {
     }
     if (view >= 0) return 'Đang xem lại nước ${view + 1}';
     if (state == 'over') return result?.text ?? '';
+    if (drill != null && state == 'ai') return 'Máy đi theo đại sư…';
     if (state == 'ai') return coach != null && coach!.busy ? 'Thầy đang chấm nước của bạn…' : 'Máy đang nghĩ…';
     if (state == 'confirm') return 'Bạn có chắc muốn đi nước này?';
+    if (drill != null) return 'Luyện khai cuộc: nước ${hist.length ~/ 2 + 1}, đến lượt bạn';
     return pos.inCheck(pos.side) ? 'Bạn đang bị chiếu!' : 'Đến lượt bạn (${sideName(userSide)})';
   }
 
@@ -861,6 +1067,8 @@ class GameController extends ChangeNotifier {
           _onPuzzleMove(m);
         } else if (mode == Mode.games) {
           _onGuessMove(m);
+        } else if (drill != null) {
+          _onDrillMove(m);
         } else {
           _onUserMove(m);
         }

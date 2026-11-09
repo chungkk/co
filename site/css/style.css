@@ -214,6 +214,8 @@ body:not([data-mode="play"]) .play-only, body:not([data-mode="puzzle"]) .puzzle-
 @media (max-width: 520px) { .tabs { width: 100%; } .tabs button { flex: 1; } }
 
 /* ---------- Khai cuộc đại sư ---------- */
+.drill { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.drill select { min-width: 0; }
 .peco { font-weight: 600; font-size: 13.5px; margin-bottom: 6px; color: var(--accent); }
 .prow { display: grid; grid-template-columns: 1fr 40px 90px 52px; gap: 8px; align-items: center; width: 100%; background: none; border: 0; padding: 5px 4px; border-radius: 6px; cursor: pointer; font-size: 13.5px; text-align: left; }
 .prow:hover { background: var(--surface-2); }

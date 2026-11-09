@@ -79,6 +79,38 @@ void main() {
     expect(g.selected, g.pzCur!.sol[0] & 127);
   });
 
+  test('luyện khai cuộc: từ chối nước ngoài sách, đi theo đại sư tới khi hết sách', () async {
+    final k = GameController.drillOps.indexWhere((o) => o.name == 'Thuận pháo');
+    g.startDrill(k);
+    expect(g.drill, isNotNull);
+    expect(g.hist.map((h) => h.name), ['Pháo 2 bình 5', 'Pháo 8 bình 5']);
+    expect(g.state, 'user');
+    // nước ngoài sách bị từ chối, không đi
+    final bad = g.pos.legalMoves().firstWhere((m) => g.pos.moveName(m).startsWith('Tướng'));
+    g.tapSquare(bad & 127);
+    g.tapSquare(bad >> 7);
+    expect(g.hist.length, 2);
+    expect(g.coach!.title, contains('ngoài sách'));
+    // gợi ý: mũi tên các nước đại sư
+    g.primaryAction();
+    expect(g.arrows.first.kind, 'best');
+    var moves = 0;
+    while (g.drill != null && moves < 40) {
+      await waitFor(() => g.state == 'user' || g.drill == null);
+      if (g.drill == null) break;
+      final top = g.proMoves(g.pos)!..sort((a, b) => b.n.compareTo(a.n));
+      g.tapSquare(top.first.m & 127);
+      g.tapSquare(top.first.m >> 7);
+      moves++;
+    }
+    expect(g.drill, isNull);
+    expect(g.coach!.title, startsWith('🏁 Hết sách khai cuộc'));
+    expect(g.coach!.lines.join(' '), contains('Bạn đi đúng ngay lần đầu'));
+    // ván tiếp tục như đấu thường
+    await waitFor(() => g.state == 'user');
+    expect(g.hist.length, greaterThan(4));
+  });
+
   test('sổ lỗi sai: lưu thẻ, làm sai rồi đúng, giãn lịch ôn', () async {
     var now = DateTime(2026, 1, 1).millisecondsSinceEpoch;
     g.clock = () => now;

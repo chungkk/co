@@ -222,6 +222,8 @@ class ProBookCard extends StatelessWidget {
     }
     if (g.pro == null) {
       children.add(Text('Đang tải dữ liệu…', style: _small(context)));
+    } else if (g.drill != null && g.view < 0 && g.state == 'user') {
+      children.add(Text('Đang luyện: hãy tự nhớ nước đại sư hay đi. Bấm "Gợi ý" nếu cần.', style: _small(context)));
     } else if (pm == null || pm.isEmpty) {
       if (g.hist.isNotEmpty) children.add(Text('Thế cờ này đã ra khỏi sách khai cuộc. Từ đây hãy tự tính toán!', style: _small(context)));
     } else {
@@ -291,11 +293,72 @@ class ProBookCard extends StatelessWidget {
         ),
       );
     }
+    children.add(
+      Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: Divider(height: 1, color: pal.line),
+      ),
+    );
+    children.add(
+      Padding(
+        padding: const EdgeInsets.only(top: 10),
+        child: Row(
+          children: [
+            Expanded(
+              child: IgnorePointer(
+                ignoring: g.drill != null,
+                child: Opacity(
+                  opacity: g.drill != null ? 0.5 : 1,
+                  child: _SelectField(text: GameController.drillOps[g.drillOp].name, onTap: () => _pickOpening(context)),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            AppButton(
+              label: g.drill != null ? 'Dừng luyện' : 'Luyện khai cuộc',
+              compact: true,
+              onPressed: g.pro == null ? null : () => _toggleDrill(context),
+            ),
+          ],
+        ),
+      ),
+    );
     return AppCard(
       title: 'Khai cuộc đại sư',
       trailing: Text('từ ${fmtInt(g.pro?.games ?? 104186)} ván giải đấu', style: _small(context)),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
     );
+  }
+
+  void _pickOpening(BuildContext context) {
+    showPickerSheet<int>(
+      context,
+      title: 'Khai cuộc muốn luyện',
+      items: [
+        for (var i = 0; i < GameController.drillOps.length; i++)
+          (i, GameController.drillOps[i].name, GameController.drillOps[i].seq.join(', ')),
+      ],
+      selected: g.drillOp,
+      onPick: g.setDrillOp,
+    );
+  }
+
+  Future<void> _toggleDrill(BuildContext context) async {
+    if (g.drill != null) return g.stopDrill();
+    if (g.hist.length > 2 && g.result == null) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          content: const Text('Bỏ ván đang chơi để luyện khai cuộc?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Thôi')),
+            TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Luyện')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    g.startDrill(g.drillOp);
   }
 
   Widget _legend(BuildContext c, Color col, String t) => Row(

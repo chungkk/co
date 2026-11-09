@@ -242,13 +242,116 @@
   }
   const histNames = () => S.hist.map((h) => h.name);
 
+  // ---------- Luyện khai cuộc theo cây nước đại sư ----------
+  const DRILL_OPS = [{ name: 'Tự do (theo đại sư)', seq: [] }].concat(OPENINGS.filter((o, i) => OPENINGS.findIndex((x) => x.name === o.name) === i));
+  const DRILL_MIN = 20; // thế cờ có ít hơn số ván này coi như đã ra khỏi sách
+  const bookTot = (pm) => (pm ? pm.reduce((s, x) => s + x.n, 0) : 0);
+  // nước chấp nhận được: ≥10% số ván, hoặc nằm trong top 3 và ≥3%
+  function drillAccept(pm, m) {
+    const sorted = pm.slice().sort((a, b) => b.n - a.n), x = sorted.find((y) => y.m === m);
+    if (!x) return null;
+    const rank = sorted.indexOf(x);
+    return x.share >= 0.1 || (rank < 3 && x.share >= 0.03) ? { x, rank, top: sorted[0] } : null;
+  }
+  function startDrill(k) {
+    if (!PRO.pos) return;
+    const op = DRILL_OPS[k] || DRILL_OPS[0];
+    S.tok++; engine.reset();
+    S.pos = Pos.start(); S.hist = []; S.selected = -1; S.arrows = []; S.view = -1; S.result = null;
+    S.hintsUsed = 0; S.lastScore = 0;
+    for (const nm of op.seq) {
+      const m = S.pos.legalMoves().find((x) => S.pos.moveName(x) === nm);
+      if (m === undefined) break;
+      const before = S.pos.clone(); S.pos.make(m);
+      S.hist.push({ m, name: nm, by: before.side === S.userSide ? 'user' : 'ai', before });
+    }
+    S.drill = { name: op.name, ok: 0, tot: 0, fails: 0 };
+    const lines = [
+      'Bạn cầm ' + sideName(S.userSide) + '. Máy đi theo các nước đại sư hay chơi; bạn hãy đáp bằng nước phổ biến (≥10% số ván, hoặc nằm trong top 3).',
+      'Đi nước hiếm hoặc ngoài sách sẽ được đi lại. Bấm "Gợi ý" để xem đại sư thường đi gì.',
+    ];
+    if (op.tip) lines.push(op.name + ': ' + op.tip);
+    S.coach = { title: '📖 Luyện khai cuộc: ' + op.name, cls: null, lines };
+    save(); drillNext();
+  }
+  function stopDrill(msg) {
+    S.drill = null; S.arrows = [];
+    if (msg) S.coach = { title: 'Đã dừng luyện khai cuộc', cls: null, lines: ['Ván tiếp tục như đấu thường: máy đánh theo cấp độ đã chọn, thầy chấm từng nước.'] };
+    if (checkOver()) return;
+    if (S.pos.side === S.userSide) startUserTurn(); else aiTurn();
+  }
+  function drillNext() {
+    const pm = proMoves(S.pos);
+    if (bookTot(pm) < DRILL_MIN) return drillEnd();
+    if (S.pos.side === S.userSide) { S.state = 'user'; S.selected = -1; S.drill.fails = 0; render(); }
+    else drillReply(pm);
+  }
+  async function drillReply(pm) {
+    const tok = S.tok;
+    S.state = 'ai'; render();
+    await sleep(450); if (tok !== S.tok || !S.drill) return;
+    // chọn theo tần suất đại sư, bỏ các nước quá hiếm
+    const pool = pm.filter((x) => x.n >= 3 && x.share >= 0.03), ws = pool.length ? pool : pm;
+    let r0 = Math.random() * ws.reduce((s, x) => s + x.n, 0), pick = ws[ws.length - 1];
+    for (const x of ws) { r0 -= x.n; if (r0 <= 0) { pick = x; break; } }
+    const before = S.pos.clone(), name = S.pos.moveName(pick.m);
+    S.pos.make(pick.m); S.hist.push({ m: pick.m, name, by: 'ai', before });
+    if (S.coach && !S.coach.busy) S.coach.lines.push('Máy đáp: ' + name + ' (' + pct(pick.share) + ' số ván đại sư).');
+    save(); drillNext();
+  }
+  function onDrillMove(m) {
+    const pm = proMoves(S.pos) || [], name = S.pos.moveName(m), d = S.drill;
+    const ok = drillAccept(pm, m);
+    if (!ok) {
+      d.fails++;
+      const y = pm.find((z) => z.m === m);
+      const lines = [y ? name + ' chỉ có ' + y.n.toLocaleString('vi') + ' ván (' + pct(y.share) + '): đại sư ít chọn nước này.' : name + ' không có trong ván đại sư nào ở thế cờ này.'];
+      if (d.fails >= 2) {
+        lines.push('Đại sư thường đi: ' + proLine(pm, 3) + '. Mũi tên xanh là nước chính.');
+        S.arrows = pm.slice(0, 3).map((x, i) => ({ m: x.m, kind: i ? 'alt' : 'best' }));
+      } else {
+        lines.push('Hãy thử lại. Bấm "Gợi ý" nếu chưa nhớ.');
+        S.arrows = [{ m, kind: 'bad' }];
+      }
+      S.coach = { title: '✗ ' + name + ': ' + (y ? 'nước hiếm' : 'ngoài sách'), cls: 'mistake', lines };
+      S.selected = -1; render(); return;
+    }
+    d.tot++; if (d.fails === 0) d.ok++;
+    const { x, rank, top } = ok;
+    const before = S.pos.clone();
+    S.pos.make(m);
+    const lines = [(rank === 0 ? 'Nước chính' : 'Nước phổ biến') + ': ' + x.n.toLocaleString('vi') + ' ván đại sư (' + pct(x.share) + '), bên đi thắng ' + pct(x.w / x.n) + ', hòa ' + pct(x.d / x.n) + '.'];
+    if (rank > 0) lines.push('Nước chính ở thế này: ' + top.name + ' (' + pct(top.share) + ').');
+    if (d.fails) lines.push('(Đúng sau ' + d.fails + ' lần thử.)');
+    const coach = { title: (rank === 0 ? '★ ' : '📖 ') + name + ': nước của đại sư', cls: rank === 0 ? 'best' : 'book', lines };
+    S.hist.push({ m, name, by: 'user', before, cls: d.fails ? 'inacc' : rank === 0 ? 'best' : 'book', coach: { title: coach.title, cls: coach.cls, lines } });
+    S.coach = coach; S.arrows = [];
+    save(); render(); drillNext();
+  }
+  function drillHint() {
+    const pm = proMoves(S.pos) || [];
+    S.hintsUsed++; S.drill.fails = Math.max(S.drill.fails, 1);
+    S.arrows = pm.slice(0, 3).map((x, i) => ({ m: x.m, kind: i ? 'alt' : 'best' }));
+    S.coach = { title: '💡 Đại sư thường đi', cls: null, lines: [proLine(pm, 3) + '.', 'Mũi tên xanh là nước chính, mũi tên vàng là các nước phổ biến khác.'] };
+    render();
+  }
+  function drillEnd() {
+    const d = S.drill; S.drill = null;
+    const lines = ['Thế cờ đã ra khỏi sách (ít hơn ' + DRILL_MIN + ' ván đại sư).'];
+    if (d.tot) lines.push('Bạn đi đúng ngay lần đầu ' + d.ok + '/' + d.tot + ' nước (' + pct(d.ok / d.tot) + ').');
+    const eco = ecoOf(); if (eco) lines.push('Thế trận: ' + eco.name + '.');
+    lines.push('Ván tiếp tục: từ đây máy đánh theo cấp độ đã chọn và thầy chấm từng nước như bình thường. Bấm "Luyện khai cuộc" để luyện lại.');
+    S.coach = { title: '🏁 Hết sách khai cuộc: ' + d.name, cls: null, lines };
+    stopDrill(false);
+  }
+
   // ---------- Luồng ván cờ ----------
   function save() {
     if (S.mode === 'puzzle') return;
     store.set('game', { side: S.userSide, moves: S.hist.map((h) => ({ m: h.m, by: h.by, cls: h.cls, coach: h.coach })), hints: S.hintsUsed });
   }
   function newGame(keepSide) {
-    S.tok++; engine.reset();
+    S.tok++; engine.reset(); S.drill = null;
     if (!keepSide) S.userSide = store.get('side', RED);
     S.pos = Pos.start(); S.hist = []; S.selected = -1; S.arrows = []; S.view = -1; S.result = null;
     S.hintsUsed = 0; S.lastScore = 0;
@@ -258,6 +361,7 @@
   }
   function restore() {
     const g = store.get('game', null);
+    S.drill = null;
     if (!g || !g.moves || !g.moves.length) return false;
     try {
       S.userSide = g.side; S.pos = Pos.start(); S.hist = [];
@@ -516,6 +620,7 @@
     rebuildPos();
     S.result = null; S.arrows = [];
     S.coach = { title: 'Đã đi lại', cls: null, lines: ['Hãy thử một nước khác.'] };
+    if (S.drill) { S.drill.fails = 0; save(); render(); return drillNext(); }
     save(); startUserTurn();
   }
   function rebuildPos() {
@@ -679,6 +784,7 @@
     const op = ecoOf();
     let h = '';
     if (!PRO.pos) h = '<div class="muted small">Đang tải dữ liệu…</div>';
+    else if (S.drill && S.view < 0 && S.state === 'user') h = '<div class="muted small">Đang luyện: hãy tự nhớ nước đại sư hay đi. Bấm "Gợi ý" nếu cần.</div>';
     else if (!pm || !pm.length) h = '<div class="muted small">' + (S.hist.length ? 'Thế cờ này đã ra khỏi sách khai cuộc. Từ đây hãy tự tính toán!' : '') + '</div>';
     else {
       const tot = pm.reduce((s, x) => s + x.n, 0), red = pos.side === RED;
@@ -693,6 +799,11 @@
     }
     if (op) h = '<div class="peco">' + esc(op.name) + '</div>' + h;
     el.innerHTML = h;
+    const sel = $('drillOp');
+    if (!sel.options.length) sel.innerHTML = DRILL_OPS.map((o, i) => `<option value="${i}">${esc(o.name)}</option>`).join('');
+    sel.disabled = !!S.drill;
+    $('drillBtn').textContent = S.drill ? 'Dừng luyện' : 'Luyện khai cuộc';
+    $('drillBtn').disabled = !PRO.pos;
   }
 
   function renderStatus() {
@@ -720,8 +831,10 @@
     }
     if (S.view >= 0) t = 'Đang xem lại nước ' + (S.view + 1);
     else if (S.state === 'over') t = S.result.text;
-    else if (S.state === 'ai') t = S.coach && S.coach.busy ? 'Thầy đang chấm nước của bạn…' : 'Máy đang nghĩ…';
+    else if (S.state === 'ai' && !S.drill) t = S.coach && S.coach.busy ? 'Thầy đang chấm nước của bạn…' : 'Máy đang nghĩ…';
     else if (S.state === 'confirm') t = 'Bạn có chắc muốn đi nước này?';
+    else if (S.drill && S.state === 'ai') t = 'Máy đi theo đại sư…';
+    else if (S.drill) t = 'Luyện khai cuộc: nước ' + (Math.floor(S.hist.length / 2) + 1) + ', đến lượt bạn';
     else t = S.pos.inCheck(S.pos.side) ? 'Bạn đang bị chiếu!' : 'Đến lượt bạn (' + sideName(S.userSide) + ')';
     $('status').textContent = t;
     $('status').className = 'status' + (S.state === 'ai' ? ' thinking' : '') + (S.state === 'user' && S.pos.inCheck(S.pos.side) ? ' alert' : '');
@@ -1211,7 +1324,7 @@
     const p = S.pos.b[sq];
     if (S.selected >= 0) {
       const m = S.selected | (sq << 7);
-      if (S.pos.isLegal(m)) { if (S.mode === 'puzzle') onPuzzleMove(m); else if (S.mode === 'games') onGuessMove(m); else onUserMove(m); return; }
+      if (S.pos.isLegal(m)) { if (S.mode === 'puzzle') onPuzzleMove(m); else if (S.mode === 'games') onGuessMove(m); else if (S.drill) onDrillMove(m); else onUserMove(m); return; }
     }
     if (p && sgn(p) === S.userSide) S.selected = sq === S.selected ? -1 : sq;
     else S.selected = -1;
@@ -1250,12 +1363,18 @@
     else if (a === 'keep-blunder') confirmBlunder(false);
     else if (a === 'exit-view') { S.view = -1; render(); }
   });
-  $('hintBtn').onclick = () => (S.mode === 'puzzle' ? puzzleHint() : S.mode === 'games' ? (S.state === 'reveal' ? (S.coach.gmNext = false, gmGoto(GM.ply + 1)) : gmGoto(GM.ply + 1)) : showHint());
+  $('hintBtn').onclick = () => (S.mode === 'puzzle' ? puzzleHint() : S.mode === 'play' && S.drill ? S.state === 'user' && drillHint() : S.mode === 'games' ? (S.state === 'reveal' ? (S.coach.gmNext = false, gmGoto(GM.ply + 1)) : gmGoto(GM.ply + 1)) : showHint());
   $('undoBtn').onclick = () => (S.mode === 'puzzle' ? loadPuzzle(PZ.idx) : S.mode === 'games' ? gmGoto(GM.guess ? Math.max(0, GM.ply - 2) : GM.ply - 1) : undo());
   $('pzCol').onchange = (e) => openCollection(e.target.value, 0);
+  $('drillBtn').onclick = () => {
+    if (S.drill) { S.tok++; stopDrill(true); return; }
+    if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi để luyện khai cuộc?')) return;
+    startDrill(+$('drillOp').value);
+  };
   $('gmCol').onchange = (e) => gmOpenCol(e.target.value, 0);
   $('gmFilter').oninput = (e) => { GM.filter = e.target.value; renderGames(); };
-  $('newBtn').onclick = () => { if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi và bắt đầu ván mới?')) return; newGame(true); };
+  $('newBtn').onclick = () => {
+    if (S.drill) { newGame(true); return; } if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi và bắt đầu ván mới?')) return; newGame(true); };
   $('level').onchange = (e) => { S.level = +e.target.value; store.set('level', S.level); };
   $('side').onchange = (e) => {
     S.userSide = +e.target.value; store.set('side', S.userSide);
