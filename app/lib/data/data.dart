@@ -62,7 +62,13 @@ class Puzzle {
 
   /// Chỉ số gốc trong bộ (khi bộ đã lọc bài trùng), dùng làm khóa tiến độ
   final int? k;
-  Puzzle(this.fen, this.n, this.sol, this.theme, this.name, this.notes, [this.k]);
+  final List<String> themes;
+
+  /// Thẻ ôn lỗi sai (chỉ có ở bộ "Ôn lỗi sai của bạn")
+  final ReviewCard? rv;
+  Puzzle(this.fen, this.n, this.sol, this.theme, this.name, this.notes, [this.k, this.themes = const [], this.rv]);
+
+  List<String> get allThemes => themes.isNotEmpty ? themes : [?theme];
 
   factory Puzzle.fromJson(Map<String, dynamic> j) => Puzzle(
     j['fen'] as String,
@@ -72,6 +78,59 @@ class Puzzle {
     j['name'] as String?,
     [for (final x in (j['notes'] as List?) ?? const []) ((x as List)[0] as int, x[1] as String)],
     j['k'] as int?,
+    ((j['themes'] as List?) ?? const []).cast<String>(),
+  );
+}
+
+/// Một thế cờ người chơi từng đi sai, ôn lại theo lịch giãn cách.
+class ReviewCard {
+  final String fen;
+  final int added;
+  int best, played, loss, reps, lapses, due;
+  String bestName, playedName;
+
+  /// Khoảng cách ôn (ngày); 0 = cần ôn lại ngay
+  int iv;
+  ReviewCard({
+    required this.fen,
+    required this.added,
+    required this.best,
+    required this.played,
+    required this.bestName,
+    required this.playedName,
+    required this.loss,
+    this.reps = 0,
+    this.lapses = 0,
+    this.iv = 0,
+    required this.due,
+  });
+
+  Map<String, dynamic> toJson() => {
+    'fen': fen,
+    'added': added,
+    'best': best,
+    'played': played,
+    'bestName': bestName,
+    'playedName': playedName,
+    'loss': loss,
+    'reps': reps,
+    'lapses': lapses,
+    'iv': iv,
+    'due': due,
+  };
+
+  factory ReviewCard.fromJson(Map<String, dynamic> j) => ReviewCard(
+    fen: j['fen'] as String,
+    added: (j['added'] as num).toInt(),
+    best: j['best'] as int,
+    played: j['played'] as int,
+    bestName: j['bestName'] as String,
+    playedName: j['playedName'] as String,
+    loss: (j['loss'] as num).toInt(),
+    reps: (j['reps'] as num?)?.toInt() ?? 0,
+    lapses: (j['lapses'] as num?)?.toInt() ?? 0,
+    iv: (j['iv'] as num?)?.toInt() ?? 0,
+    due: (j['due'] as num).toInt(),
   );
 }
 
@@ -79,18 +138,23 @@ class PuzzleCollection {
   final String id, title;
   final String? source;
   final List<Puzzle> items;
-  PuzzleCollection(this.id, this.title, this.source, this.items);
+  final bool review;
+  PuzzleCollection(this.id, this.title, this.source, this.items, {this.review = false});
 }
 
 class CollectionInfo {
-  final String id, title;
-  final int count;
+  final String id;
+  String title;
+  int count;
   CollectionInfo(this.id, this.title, this.count);
 }
+
+const reviewColId = 'on-loi';
 
 Future<List<CollectionInfo>> loadPuzzleIndex() async {
   final list = jsonDecode(await rootBundle.loadString('assets/data/puzzles/index.json')) as List;
   return [
+    CollectionInfo(reviewColId, 'Ôn lỗi sai của bạn', 0),
     CollectionInfo('thuc-chien', 'Thực chiến (máy tự đánh)', 70),
     for (final c in list) CollectionInfo(c['id'] as String, c['title'] as String, c['count'] as int),
   ];

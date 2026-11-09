@@ -135,6 +135,13 @@ class GameController extends ChangeNotifier {
 
   /// Thế cờ đã giải (theo FEN): cùng thế cờ ở nhiều bộ chỉ cần giải một lần
   late Set<String> pzSolvedFen;
+  bool pzHinted = false, _pzRecorded = false;
+
+  /// Sổ lỗi sai: thế cờ người chơi từng đi Sai lầm/Nước hỏng
+  late List<ReviewCard> reviews;
+
+  /// Thống kê theo chủ đề: [giải đúng ngay lần đầu, số lần thử]
+  late Map<String, List<int>> themeStat;
 
   // Ván đại sư
   List<CollectionInfo>? gmIndex;
@@ -163,6 +170,14 @@ class GameController extends ChangeNotifier {
     );
     pzSolved = store.get<List<dynamic>>('solved', []).map((x) => x is int ? 'thuc-chien:${x - 1}' : x as String).toSet();
     pzSolvedFen = store.get<List<dynamic>>('solvedFen', []).cast<String>().toSet();
+    reviews = [
+      for (final x in store.get<List<dynamic>>('review', []))
+        if (x is Map<String, dynamic>) ReviewCard.fromJson(x),
+    ];
+    themeStat = {
+      for (final e in store.get<Map<String, dynamic>>('themeStat', {}).entries)
+        e.key: [for (final v in e.value as List) (v as num).toInt()],
+    };
   }
 
   Future<void> init() async {
@@ -175,6 +190,7 @@ class GameController extends ChangeNotifier {
     loadPuzzleIndex()
         .then((l) {
           pzCols = l;
+          _updateReviewCount();
           notifyListeners();
         })
         .catchError((_) {});
@@ -406,8 +422,12 @@ class GameController extends ChangeNotifier {
     if (mine.isNotEmpty) {
       lines.add('Độ chính xác của bạn: ${(acc / mine.length).round()}%');
       lines.add(cls.keys.where((k) => cnt[k] != null).map((k) => '${cls[k]!.icon} ${cls[k]!.short}: ${cnt[k]}').join(' · '));
-      if (hist.any((h) => h.by == 'user' && (h.cls == 'mistake' || h.cls == 'blunder'))) {
-        lines.add('Bấm vào các nước đánh dấu ? hoặc ?? trong danh sách nước đi để xem lại nên đi thế nào.');
+      final bad = hist.where((h) => h.by == 'user' && (h.cls == 'mistake' || h.cls == 'blunder')).length;
+      if (bad > 0) {
+        lines.add(
+          'Bấm vào các nước đánh dấu ? hoặc ?? trong danh sách nước đi để xem lại nên đi thế nào. '
+          '$bad thế cờ đi sai đã được lưu vào "Ôn lỗi sai của bạn" ở tab Bài tập.',
+        );
       }
     }
     if (hintsUsed > 0) lines.add('Số lần dùng gợi ý: $hintsUsed');
@@ -495,6 +515,7 @@ class GameController extends ChangeNotifier {
     entry.bestName = before.moveName(best.move);
     entry.best = best.move;
     lastScore = userScore;
+    final saved = (c == 'mistake' || c == 'blunder') && addReview(before, m, best.move, loss);
 
     final lines = <String>[];
     if (c == 'best' || c == 'book' || c == 'good') {
@@ -525,6 +546,7 @@ class GameController extends ChangeNotifier {
       final pmB = proMoves(before);
       if (pmB != null && pmB.isNotEmpty) lines.add('Đại sư thường đi: ${proLine(pmB, 3)}.');
       lines.addAll(explain(before, best.move, score: best.score).map((x) => '• $x'));
+      if (saved) lines.add('📌 Đã lưu thế cờ này vào "Ôn lỗi sai của bạn" (tab Bài tập) để luyện lại.');
     }
     final op = openingOf(histNames());
     final co = Coach('${cls[c]!.icon} $name: ${cls[c]!.label}', cls: c, lines: lines);
@@ -727,7 +749,7 @@ class GameController extends ChangeNotifier {
   }
 
   bool get canUndo {
-    if (mode == Mode.puzzle) return state != 'ai';
+    if (mode == Mode.puzzle) return state != 'ai' && pzCur != null;
     if (mode == Mode.games) return gmGame != null && gmPly > 0 && state != 'ai';
     return hist.any((h) => h.by == 'user') && state != 'ai';
   }
@@ -772,7 +794,13 @@ class GameController extends ChangeNotifier {
     if (mode == Mode.puzzle) {
       final left = pzCur != null ? pzCur!.n - _usedMoves() : 0;
       if (view >= 0) return 'Đang xem lại nước ${view + 1}';
+      if (pzCol?.review ?? false) {
+        if (state == 'user') return 'Thẻ ${pzIdx + 1}: tìm nước tốt nhất';
+        if (state == 'done') return 'Đã tìm ra nước đúng';
+        if (state == 'ai') return 'Thầy đang chấm…';
+      }
       return switch (state) {
+        'empty' => 'Chưa có thẻ nào',
         'user' => 'Bài ${pzIdx + 1}: chiếu bí trong $left nước',
         'ai' => 'Máy đang tìm cách đỡ…',
         'fail' => 'Chưa đúng, thử lại nhé',
@@ -932,7 +960,194 @@ class GameController extends ChangeNotifier {
   // ---------- Bài tập sát cục ----------
   int _usedMoves() => hist.where((h) => h.by == 'user').length;
   String _pzKey(int i) => '${pzCol!.id}:${pzCol!.items[i].k ?? i}';
-  bool isSolved(int i) => pzCol != null && (pzSolved.contains(_pzKey(i)) || pzSolvedFen.contains(pzCol!.items[i].fen));
+  bool isSolved(int i) {
+    final col = pzCol;
+    if (col == null) return false;
+    if (col.review) return col.items[i].rv!.due > _now();
+    return pzSolved.contains(_pzKey(i)) || pzSolvedFen.contains(col.items[i].fen);
+  }
+
+  // ---------- Sổ lỗi sai: ôn lại thế cờ mình từng đi sai (lặp lại ngắt quãng) ----------
+  static const _day = 86400000, _revMax = 300;
+
+  /// Đồng hồ (ms); test có thể thay để giả lập thời gian trôi
+  int Function() clock = () => DateTime.now().millisecondsSinceEpoch;
+  int _now() => clock();
+
+  void _saveReview() => store.set('review', [for (final c in reviews) c.toJson()]);
+
+  bool addReview(Pos before, int played, int best, int loss) {
+    if (played == best) return false;
+    final fen = before.toFen();
+    var c = reviews.where((x) => x.fen == fen).firstOrNull;
+    if (c == null) {
+      c = ReviewCard(
+        fen: fen,
+        added: _now(),
+        best: best,
+        played: played,
+        bestName: '',
+        playedName: '',
+        loss: loss,
+        due: _now(),
+      );
+      reviews.add(c);
+    }
+    c
+      ..best = best
+      ..played = played
+      ..bestName = before.moveName(best)
+      ..playedName = before.moveName(played)
+      ..loss = loss
+      ..iv = 0
+      ..due = _now();
+    if (reviews.length > _revMax) reviews.removeRange(0, reviews.length - _revMax);
+    _saveReview();
+    _updateReviewCount();
+    return true;
+  }
+
+  int get reviewDue => reviews.where((c) => c.due <= _now()).length;
+
+  void _updateReviewCount() {
+    for (final c in pzCols) {
+      if (c.id != reviewColId) continue;
+      c.count = reviews.length;
+      c.title = 'Ôn lỗi sai của bạn${reviewDue > 0 ? ' · $reviewDue đến hạn' : ''}';
+    }
+  }
+
+  PuzzleCollection _reviewCollection() {
+    // thẻ đến hạn lên trước, rồi tới thẻ sắp đến hạn
+    final cards = [...reviews]..sort((a, b) => a.due.compareTo(b.due));
+    return PuzzleCollection(reviewColId, 'Ôn lỗi sai của bạn', null, [
+      for (final c in cards) Puzzle(c.fen, 1, [c.best], null, null, const [], null, const [], c),
+    ], review: true);
+  }
+
+  void _gradeReview(ReviewCard c, bool ok) {
+    c.reps++;
+    if (ok) {
+      c.iv = c.iv > 0 ? math.min(120, (c.iv * 2.5).round()) : 1;
+    } else {
+      c.iv = 0;
+      c.lapses++;
+    }
+    c.due = _now() + (ok ? c.iv * _day : 0);
+    _saveReview();
+    _updateReviewCount();
+  }
+
+  String fmtDue(ReviewCard c) {
+    final d = ((c.due - _now()) / _day).ceil();
+    return d <= 0 ? 'đến hạn ôn' : 'ôn lại sau $d ngày';
+  }
+
+  Future<void> _onReviewMove(int m) async {
+    final t = tok, before = pos.clone(), name = pos.moveName(m), c = pzCur!.rv!;
+    final capture = pos.b[m >> 7] != 0;
+    pos.make(m);
+    _moved(pos, m, capture);
+    hist.add(HistEntry(m, name, 'user', before));
+    selected = -1;
+    arrows = [];
+    state = 'ai';
+    coach = Coach('Thầy đang chấm…', busy: true);
+    _render();
+    var ok = m == c.best;
+    var loss = 0;
+    if (!ok && m != c.played) {
+      // chấp nhận nước khác nếu máy đánh giá ngang nước tốt nhất
+      final rb = await engine.search(before.clone(), const SearchOpts(timeMs: 900, multipv: 1));
+      if (t != tok || rb == null) return;
+      SearchResult? ra;
+      if (pos.legalMoves().isNotEmpty) {
+        ra = await engine.search(pos.clone(), const SearchOpts(timeMs: 900, multipv: 1));
+        if (t != tok) return;
+      }
+      final sb = rb.multi.isNotEmpty ? rb.multi[0].score : 0;
+      final sa = ra != null && ra.multi.isNotEmpty ? -ra.multi[0].score : MATE;
+      loss = math.max(0, clampS(sb) - clampS(sa));
+      ok = loss <= 40;
+    }
+    if (pzFails == 0 && !pzHinted) _gradeReview(c, ok);
+    if (ok) {
+      state = 'done';
+      _fx('win', 300);
+      coach = Coach(
+        '✓ $name: chính xác!',
+        cls: 'best',
+        lines: [
+          m == c.best ? 'Đúng nước tốt nhất.' : 'Nước này cũng tốt ngang nước máy chọn (${c.bestName}).',
+          ...explain(before, m).map((x) => '• $x'),
+          'Lúc trước bạn đã đi ${c.playedName} và mất ${(c.loss / 100).toStringAsFixed(1)} Tốt lợi thế.',
+          pzFails > 0 || pzHinted ? 'Thẻ này sẽ được ôn lại sớm vì bạn chưa làm đúng ngay lần đầu.' : 'Thẻ này: ${fmtDue(c)}.',
+        ],
+      );
+    } else {
+      pzFails++;
+      state = 'fail';
+      _fx('fail', 350);
+      arrows = [Arrow(m, 'bad')];
+      coach = Coach(
+        '✗ Chưa đúng: $name',
+        cls: 'mistake',
+        lines: [
+          m == c.played
+              ? 'Đây chính là nước bạn đã đi sai lần trước.'
+              : 'Nước này kém nước tốt nhất khoảng ${(loss / 100).toStringAsFixed(1)} Tốt.',
+          'Bấm "Thử lại" để tìm nước khác, hoặc "Gợi ý" sau khi thử lại.',
+        ],
+      );
+    }
+    _render();
+  }
+
+  void deleteReview() {
+    final c = pzCur?.rv;
+    if (c == null) return;
+    reviews.remove(c);
+    _saveReview();
+    _updateReviewCount();
+    pzCol = _reviewCollection();
+    loadPuzzle(math.min(pzIdx, math.max(0, pzCol!.items.length - 1)));
+  }
+
+  // ---------- Thống kê theo chủ đề: tỷ lệ giải đúng ngay lần đầu ----------
+  void _recordTheme(bool ok) {
+    if (_pzRecorded || pzCur == null || pzCol!.review) return;
+    _pzRecorded = true;
+    for (final t in pzCur!.allThemes) {
+      final x = themeStat.putIfAbsent(t, () => [0, 0]);
+      x[1]++;
+      if (ok) x[0]++;
+    }
+    store.set('themeStat', themeStat);
+  }
+
+  /// Tối đa 3 chủ đề có tỷ lệ đúng dưới 70% (đã thử ít nhất 3 bài)
+  List<({String t, int ok, int tot})> get weakThemes {
+    final out = [
+      for (final e in themeStat.entries)
+        if (e.value[1] >= 3 && e.value[0] / e.value[1] < 0.7) (t: e.key, ok: e.value[0], tot: e.value[1]),
+    ];
+    double r(({String t, int ok, int tot}) x) => (x.ok + 1) / (x.tot + 2);
+    out.sort((a, b) => r(a).compareTo(r(b)));
+    return out.take(3).toList();
+  }
+
+  void practiceTheme(String t) {
+    final items = pzCol!.items;
+    bool has(Puzzle p) => p.allThemes.contains(t);
+    for (final unsolvedOnly in [true, false]) {
+      for (var k = 1; k <= items.length; k++) {
+        final i = (pzIdx + k) % items.length;
+        if (has(items[i]) && (!unsolvedOnly || !isSolved(i))) return loadPuzzle(i);
+      }
+    }
+    coach = Coach('Không có bài "$t" trong bộ này', lines: ['Hãy chọn bộ khác, ví dụ Vu sư ma đề hoặc Sát trước đại toàn.']);
+    _render();
+  }
   int get solvedCount => pzCol == null
       ? 0
       : [
@@ -941,6 +1156,11 @@ class GameController extends ChangeNotifier {
         ].length;
 
   Future<void> openCollection(String id, [int idx = 0]) async {
+    if (id == reviewColId) {
+      pzCol = _reviewCollection();
+      store.set('pzCol', reviewColId);
+      return loadPuzzle(0);
+    }
     var col = _pzCache[id];
     if (col == null) {
       try {
@@ -962,7 +1182,31 @@ class GameController extends ChangeNotifier {
 
   void loadPuzzle(int i) {
     final items = pzCol?.items;
-    if (items == null || items.isEmpty) return;
+    if (items == null) return;
+    if (items.isEmpty) {
+      tok++;
+      pzCur = null;
+      pos = Pos.start();
+      hist = [];
+      arrows = [];
+      selected = -1;
+      view = -1;
+      state = 'empty';
+      userSide = RED;
+      moveSerial++;
+      coach = pzCol!.review
+          ? Coach(
+              'Chưa có lỗi nào để ôn',
+              lines: [
+                'Khi đấu với máy, mỗi nước Sai lầm (?) hoặc Nước hỏng (??) của bạn sẽ được lưu vào đây.',
+                'Ôn lại đúng những thế cờ mình từng đi sai là cách tiến bộ nhanh nhất. Thẻ làm đúng sẽ được giãn lịch ôn '
+                    '(1, 3, 7, 18… ngày), làm sai sẽ quay lại ngay.',
+              ],
+            )
+          : Coach('Bộ bài trống');
+      _render();
+      return;
+    }
     tok++;
     i = i.clamp(0, items.length - 1);
     pzIdx = i;
@@ -970,8 +1214,10 @@ class GameController extends ChangeNotifier {
     store.set('pzIdx', i);
     pzHintStep = 0;
     pzFails = 0;
-    userSide = RED;
+    pzHinted = false;
+    _pzRecorded = false;
     pos = Pos.fromFen(pzCur!.fen);
+    userSide = pzCol!.review ? pos.side : RED;
     hist = [];
     arrows = [];
     selected = -1;
@@ -979,6 +1225,20 @@ class GameController extends ChangeNotifier {
     state = 'user';
     result = null;
     moveSerial++;
+    final rv = pzCur!.rv;
+    if (rv != null) {
+      final d = DateTime.fromMillisecondsSinceEpoch(rv.added);
+      coach = Coach(
+        'Ôn lỗi · thẻ ${i + 1}/${items.length}',
+        lines: [
+          'Thế cờ từ ván của bạn (${d.day}/${d.month}/${d.year}). Bạn cầm ${sideName(pos.side)}.',
+          'Lần đó bạn đi ${rv.playedName} và mất ${(rv.loss / 100).toStringAsFixed(1)} Tốt lợi thế. Hãy tìm nước tốt hơn.',
+          'Đã ôn ${rv.reps} lần · ${fmtDue(rv)}.',
+        ],
+      );
+      _render();
+      return;
+    }
     final lines = ['Đỏ đi trước, chiếu bí trong ${pzCur!.n} nước. Máy sẽ chống đỡ bằng nước tốt nhất.'];
     if (pzCur!.theme != null) lines.add('Đòn: ${pzCur!.theme}. ${themeInfo[pzCur!.theme] ?? ''}');
     if (pzCol!.source != null) lines.add('Nguồn: ${pzCol!.title} · ${pzCol!.source}');
@@ -988,7 +1248,16 @@ class GameController extends ChangeNotifier {
     _render();
   }
 
-  void nextPuzzle() => loadPuzzle(pzIdx + 1 < pzCol!.items.length ? pzIdx + 1 : 0);
+  void nextPuzzle() {
+    if (pzCol!.review) {
+      final cur = pzCur?.rv;
+      pzCol = _reviewCollection();
+      final items = pzCol!.items;
+      final due = items.indexWhere((p) => p.rv!.due <= _now());
+      return loadPuzzle(due >= 0 ? due : math.max(0, items.indexWhere((p) => p.rv == cur)));
+    }
+    loadPuzzle(pzIdx + 1 < pzCol!.items.length ? pzIdx + 1 : 0);
+  }
   void prevPuzzle() => loadPuzzle(pzIdx - 1);
 
   String _noteAt(int ply) {
@@ -1006,6 +1275,7 @@ class GameController extends ChangeNotifier {
   }
 
   Future<void> _onPuzzleMove(int m) async {
+    if (pzCol!.review) return _onReviewMove(m);
     final t = tok, before = pos.clone(), name = pos.moveName(m);
     final followed = _onSolPath() && hist.length < pzCur!.sol.length && pzCur!.sol[hist.length] == m;
     final capture = pos.b[m >> 7] != 0;
@@ -1048,6 +1318,7 @@ class GameController extends ChangeNotifier {
   }
 
   void _puzzleFail(int? reply, String? msg) {
+    _recordTheme(false);
     pzFails++;
     final h = hist.last, lines = <String>[];
     if (msg != null) lines.add(msg);
@@ -1077,12 +1348,17 @@ class GameController extends ChangeNotifier {
     state = 'user';
     coach = Coach(
       'Thử lại',
-      lines: ['Còn ${pzCur!.n - _usedMoves()} nước để chiếu bí. Hãy tìm nước chiếu mà đối phương không thoát được.'],
+      lines: [
+        pzCol!.review
+            ? 'Tìm nước tốt nhất cho ${sideName(pos.side)}. Bấm "Gợi ý" nếu cần.'
+            : 'Còn ${pzCur!.n - _usedMoves()} nước để chiếu bí. Hãy tìm nước chiếu mà đối phương không thoát được.',
+      ],
     );
     _render();
   }
 
   void _puzzleSolved() {
+    _recordTheme(pzFails == 0 && !pzHinted);
     state = 'done';
     arrows = [];
     pzSolved.add(_pzKey(pzIdx));
@@ -1117,6 +1393,7 @@ class GameController extends ChangeNotifier {
       score = r.multi[0].score;
     }
     pzHintStep++;
+    pzHinted = true;
     if (pzHintStep == 1) {
       selected = m & 127;
       coach = Coach(
@@ -1137,6 +1414,7 @@ class GameController extends ChangeNotifier {
   }
 
   Future<void> showSolution() async {
+    if (pzCur == null) return;
     final t = ++tok;
     pos = Pos.fromFen(pzCur!.fen);
     hist = [];
@@ -1160,6 +1438,17 @@ class GameController extends ChangeNotifier {
       if (note.isNotEmpty) coach!.lines.add('   ↳ $note');
       _render();
     }
+    final rv = pzCur!.rv;
+    if (rv != null) {
+      pzHinted = true;
+      if (rv.iv > 0 || rv.due > _now()) _gradeReview(rv, false);
+      state = 'done';
+      coach!.lines.add('Nước tốt nhất. Lúc trước bạn đi ${rv.playedName}.');
+      coach!.lines.addAll(explain(Pos.fromFen(pzCur!.fen), pzCur!.sol[0]).map((x) => '• $x'));
+      _render();
+      return;
+    }
+    _recordTheme(false);
     state = 'done';
     coach!.lines.add('Chiếu bí!${pzCur!.theme != null ? ' ${themeInfo[pzCur!.theme] ?? ''}' : ''}');
     _render();

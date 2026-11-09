@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../data/data.dart';
 import '../engine/engine.dart';
 import '../game/analysis.dart';
 import '../game/constants.dart';
@@ -73,9 +74,13 @@ class CoachCard extends StatelessWidget {
     }
     if (g.mode == Mode.puzzle && g.view < 0) {
       if (g.state == 'fail') buttons.add(AppButton(label: 'Thử lại', primary: true, compact: true, onPressed: g.retryPuzzle));
+      final review = g.pzCol?.review ?? false;
       if (g.state == 'done') {
-        buttons.add(AppButton(label: 'Bài tiếp theo →', primary: true, compact: true, onPressed: g.nextPuzzle));
-        buttons.add(AppButton(label: 'Làm lại bài này', compact: true, onPressed: () => g.loadPuzzle(g.pzIdx)));
+        buttons.add(AppButton(label: review ? 'Thẻ tiếp theo →' : 'Bài tiếp theo →', primary: true, compact: true, onPressed: g.nextPuzzle));
+        buttons.add(AppButton(label: 'Làm lại', compact: true, onPressed: () => g.loadPuzzle(g.pzIdx)));
+      }
+      if (review && g.pzCur != null && (g.state == 'done' || g.state == 'fail')) {
+        buttons.add(AppButton(label: 'Bỏ thẻ', compact: true, onPressed: g.deleteReview));
       }
     }
     if (g.mode == Mode.games && c.gmNext) {
@@ -358,14 +363,29 @@ class PuzzleCard extends StatelessWidget {
         child: Center(child: CircularProgressIndicator()),
       );
     final items = col.items;
-    final groups = <int, List<int>>{};
-    for (var i = 0; i < items.length; i++) {
-      groups.putIfAbsent(items[i].n, () => []).add(i);
+    // nhóm: (tiêu đề, các chỉ số bài)
+    final groups = <(String, List<int>)>[];
+    if (col.review) {
+      final due = [for (var i = 0; i < items.length; i++) if (!g.isSolved(i)) i];
+      final later = [for (var i = 0; i < items.length; i++) if (g.isSolved(i)) i];
+      if (due.isNotEmpty) groups.add(('ĐẾN HẠN ÔN · ${due.length} THẺ', due));
+      if (later.isNotEmpty) groups.add(('ĐÃ THUỘC, CHỜ ÔN LẠI · ${later.length} THẺ', later));
+    } else {
+      final byN = <int, List<int>>{};
+      for (var i = 0; i < items.length; i++) {
+        byN.putIfAbsent(items[i].n, () => []).add(i);
+      }
+      for (final n in byN.keys.toList()..sort()) {
+        groups.add(('CHIẾU BÍ $n NƯỚC · ${byN[n]!.length} BÀI', byN[n]!));
+      }
     }
-    final ns = groups.keys.toList()..sort();
+    final weak = col.review ? const <({String t, int ok, int tot})>[] : g.weakThemes;
     return AppCard(
       title: 'Bài tập',
-      trailing: Text('Đã giải ${g.solvedCount}/${items.length}', style: _small(context)),
+      trailing: Text(
+        col.review ? '${items.length - g.solvedCount} thẻ đến hạn / ${items.length}' : 'Đã giải ${g.solvedCount}/${items.length}',
+        style: _small(context),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -390,18 +410,50 @@ class PuzzleCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 4),
-          for (final n in ns) ...[
+          if (weak.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 8, bottom: 6),
+              child: Text('Chủ đề cần luyện (giải đúng ngay lần đầu):', style: _small(context)),
+            ),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final w in weak)
+                  ActionChip(
+                    label: Text.rich(
+                      TextSpan(
+                        children: [
+                          TextSpan(text: '${w.t} '),
+                          TextSpan(
+                            text: '${w.ok}/${w.tot}',
+                            style: TextStyle(fontWeight: FontWeight.w700, color: pal.forCls('mistake')),
+                          ),
+                        ],
+                      ),
+                      style: const TextStyle(fontSize: 12.5),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                    backgroundColor: pal.surface2,
+                    side: BorderSide(color: pal.line),
+                    shape: const StadiumBorder(),
+                    onPressed: () => g.practiceTheme(w.t),
+                  ),
+              ],
+            ),
+          ],
+          for (final (title, idxs) in groups) ...[
             Padding(
               padding: const EdgeInsets.only(top: 10, bottom: 6),
               child: Text(
-                'CHIẾU BÍ $n NƯỚC · ${groups[n]!.length} BÀI',
+                title,
                 style: TextStyle(fontSize: 11.5, color: pal.muted, fontWeight: FontWeight.w600, letterSpacing: 0.5),
               ),
             ),
             Wrap(
               spacing: 5,
               runSpacing: 5,
-              children: [for (final i in groups[n]!) _PzChip(i: i, ok: g.isSolved(i), cur: i == g.pzIdx, onTap: () => g.loadPuzzle(i))],
+              children: [for (final i in idxs) _PzChip(i: i, ok: g.isSolved(i), cur: i == g.pzIdx, onTap: () => g.loadPuzzle(i))],
             ),
           ],
         ],
@@ -413,7 +465,7 @@ class PuzzleCard extends StatelessWidget {
     showPickerSheet<String>(
       context,
       title: 'Bộ bài tập',
-      items: [for (final c in g.pzCols) (c.id, c.title, '${c.count} bài')],
+      items: [for (final c in g.pzCols) (c.id, c.title, '${c.count} ${c.id == reviewColId ? 'thẻ' : 'bài'}')],
       selected: g.pzCol?.id,
       onPick: (id) => g.openCollection(id, 0),
     );

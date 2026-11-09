@@ -299,7 +299,7 @@
       lines.push('Độ chính xác của bạn: ' + Math.round(acc / mine.length) + '%');
       lines.push(Object.keys(CLS).filter((k) => cnt[k]).map((k) => CLS[k].icon + ' ' + CLS[k].short + ': ' + cnt[k]).join(' · '));
       const bad = S.hist.map((h, i) => [h, i]).filter(([h]) => h.by === 'user' && (h.cls === 'mistake' || h.cls === 'blunder'));
-      if (bad.length) lines.push('Bấm vào các nước đánh dấu ? hoặc ?? trong danh sách nước đi để xem lại nên đi thế nào.');
+      if (bad.length) lines.push('Bấm vào các nước đánh dấu ? hoặc ?? trong danh sách nước đi để xem lại nên đi thế nào. ' + bad.length + ' thế cờ đi sai đã được lưu vào "Ôn lỗi sai của bạn" ở tab Bài tập.');
     }
     if (S.hintsUsed) lines.push('Số lần dùng gợi ý: ' + S.hintsUsed);
     return { title: 'Kết thúc ván', cls: null, lines };
@@ -351,6 +351,7 @@
     entry.cls = cls; entry.loss = loss; entry.acc = Math.round(100 * Math.exp(-loss / 280));
     entry.bestName = before.moveName(best.move); entry.best = best.move;
     S.lastScore = userScore;
+    const saved = (cls === 'mistake' || cls === 'blunder') && addReview(before, m, best.move, loss);
 
     const lines = [];
     if (cls === 'best' || cls === 'book' || cls === 'good') {
@@ -371,6 +372,7 @@
       const pmB = proMoves(before);
       if (pmB && pmB.length) lines.push('Đại sư thường đi: ' + proLine(pmB, 3) + '.');
       lines.push(...explain(before, best.move, best.score).map((x) => '• ' + x));
+      if (saved) lines.push('📌 Đã lưu thế cờ này vào "Ôn lỗi sai của bạn" (tab Bài tập) để luyện lại.');
     }
     const op = openingOf(histNames());
     const coach = { title: CLS[cls].icon + ' ' + name + ': ' + CLS[cls].label, cls, lines, arrowsBest: cls === 'best' ? null : best.move, userMove: m };
@@ -709,11 +711,11 @@
     document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === S.mode));
     if (S.mode === 'puzzle') {
       const left = PZ.cur ? PZ.cur.n - usedMoves() : 0;
-      t = S.view >= 0 ? 'Đang xem lại nước ' + (S.view + 1) : ({ user: 'Bài ' + (PZ.idx + 1) + ': chiếu bí trong ' + left + ' nước', ai: 'Máy đang tìm cách đỡ…', fail: 'Chưa đúng, thử lại nhé', done: 'Đã chiếu bí!', demo: 'Đang xem lời giải…' })[S.state] || '';
+      t = S.view >= 0 ? 'Đang xem lại nước ' + (S.view + 1) : PZ.col.review && S.state === 'user' ? 'Thẻ ' + (PZ.idx + 1) + ': tìm nước tốt nhất' : PZ.col.review && S.state === 'done' ? 'Đã tìm ra nước đúng' : ({ empty: 'Chưa có thẻ nào', user: 'Bài ' + (PZ.idx + 1) + ': chiếu bí trong ' + left + ' nước', ai: 'Máy đang tìm cách đỡ…', fail: 'Chưa đúng, thử lại nhé', done: 'Đã chiếu bí!', demo: 'Đang xem lời giải…' })[S.state] || '';
       $('status').textContent = t;
       $('status').className = 'status' + (S.state === 'ai' || S.state === 'demo' ? ' thinking' : '');
       $('hintBtn').disabled = !(S.state === 'user' && S.view < 0);
-      $('undoBtn').disabled = S.state === 'ai';
+      $('undoBtn').disabled = S.state === 'ai' || !PZ.cur;
       return;
     }
     if (S.view >= 0) t = 'Đang xem lại nước ' + (S.view + 1);
@@ -756,15 +758,122 @@
   const PZ = { cols: [{ id: BUILTIN.id, title: BUILTIN.title, count: BUILTIN.items.length }], col: BUILTIN, idx: 0, cur: null, fails: 0, hintStep: 0, cache: { 'thuc-chien': BUILTIN } };
   // tiến độ: "bộ:số thứ tự"; chuyển đổi dữ liệu cũ (chỉ lưu id số của bộ thực chiến)
   PZ.solved = new Set(store.get('solved', []).map((x) => (typeof x === 'number' ? 'thuc-chien:' + (x - 1) : x)));
+  PZ.cols.unshift({ id: 'on-loi', title: 'Ôn lỗi sai của bạn', count: 0 });
   fetch('data/puzzles/index.json?v=2').then((r) => r.json()).then((list) => { PZ.cols = PZ.cols.concat(list); renderPuzzle(); }).catch(() => {});
+  setTimeout(updateReviewCount);
   const usedMoves = () => S.hist.filter((h) => h.by === 'user').length;
+
+  // ---------- Sổ lỗi sai: ôn lại thế cờ mình từng đi sai (lặp lại ngắt quãng) ----------
+  const DAY = 864e5, REV_MAX = 300, REV_ID = 'on-loi';
+  const REV = { cards: store.get('review', []) };
+  const saveReview = () => store.set('review', REV.cards);
+  function addReview(before, played, best, loss) {
+    if (played === best) return false;
+    const fen = before.toFen();
+    let c = REV.cards.find((x) => x.fen === fen);
+    if (!c) { c = { fen, added: Date.now(), reps: 0, lapses: 0 }; REV.cards.push(c); }
+    Object.assign(c, { best, played, bestName: before.moveName(best), playedName: before.moveName(played), loss, iv: 0, due: Date.now() });
+    if (REV.cards.length > REV_MAX) REV.cards.splice(0, REV.cards.length - REV_MAX);
+    saveReview(); updateReviewCount();
+    return true;
+  }
+  const dueCount = () => REV.cards.filter((c) => c.due <= Date.now()).length;
+  function updateReviewCount() {
+    const c = PZ.cols.find((x) => x.id === REV_ID);
+    if (c) { c.count = REV.cards.length; c.title = reviewTitle(); }
+  }
+  const reviewTitle = () => 'Ôn lỗi sai của bạn' + (dueCount() ? ' · ' + dueCount() + ' đến hạn' : '');
+  function reviewCollection() {
+    // thẻ đến hạn lên trước, rồi tới thẻ sắp đến hạn
+    const cards = REV.cards.slice().sort((a, b) => a.due - b.due);
+    return { id: REV_ID, title: 'Ôn lỗi sai của bạn', review: true, items: cards.map((c) => ({ fen: c.fen, n: 1, sol: [c.best], rv: c })) };
+  }
+  function gradeReview(c, ok) {
+    c.reps++;
+    if (ok) c.iv = c.iv ? Math.min(120, Math.round(c.iv * 2.5)) : 1;
+    else { c.iv = 0; c.lapses++; }
+    c.due = Date.now() + (ok ? c.iv * DAY : 0);
+    saveReview(); updateReviewCount();
+  }
+  const fmtDue = (c) => {
+    const d = Math.ceil((c.due - Date.now()) / DAY);
+    return d <= 0 ? 'đến hạn ôn' : 'ôn lại sau ' + d + ' ngày';
+  };
+  async function onReviewMove(m) {
+    const tok = S.tok, before = S.pos.clone(), name = S.pos.moveName(m), c = PZ.cur.rv;
+    S.pos.make(m); S.hist.push({ m, name, by: 'user', before });
+    S.selected = -1; S.arrows = []; S.state = 'ai';
+    S.coach = { title: 'Thầy đang chấm…', cls: null, lines: [], busy: true };
+    render();
+    let ok = m === c.best, loss = 0;
+    if (!ok && m !== c.played) {
+      // chấp nhận nước khác nếu máy đánh giá ngang nước tốt nhất
+      const rb = await engine.search(before.clone(), { timeMs: 900, multipv: 1 });
+      if (tok !== S.tok || !rb) return;
+      const ra = S.pos.legalMoves().length ? await engine.search(S.pos.clone(), { timeMs: 900, multipv: 1 }) : null;
+      if (tok !== S.tok) return;
+      const sb = rb.multi[0] ? rb.multi[0].score : 0, sa = ra && ra.multi[0] ? -ra.multi[0].score : MATE;
+      loss = Math.max(0, clampS(sb) - clampS(sa));
+      ok = loss <= 40;
+    }
+    if (PZ.fails === 0 && !PZ.hinted) gradeReview(c, ok);
+    if (ok) {
+      S.state = 'done';
+      const lines = [m === c.best ? 'Đúng nước tốt nhất.' : 'Nước này cũng tốt ngang nước máy chọn (' + c.bestName + ').'];
+      lines.push(...explain(before, m).map((x) => '• ' + x));
+      lines.push('Lúc trước bạn đã đi ' + c.playedName + ' và mất ' + (c.loss / 100).toFixed(1) + ' Tốt lợi thế.');
+      lines.push(PZ.fails || PZ.hinted ? 'Thẻ này sẽ được ôn lại sớm vì bạn chưa làm đúng ngay lần đầu.' : 'Thẻ này: ' + fmtDue(c) + '.');
+      S.coach = { title: '✓ ' + name + ': chính xác!', cls: 'best', lines };
+    } else {
+      PZ.fails++;
+      S.state = 'fail';
+      S.arrows = [{ m, kind: 'bad' }];
+      const lines = [m === c.played ? 'Đây chính là nước bạn đã đi sai lần trước.' : 'Nước này kém nước tốt nhất khoảng ' + (loss / 100).toFixed(1) + ' Tốt.'];
+      lines.push('Bấm "Thử lại" để tìm nước khác, hoặc "Gợi ý" sau khi thử lại.');
+      S.coach = { title: '✗ Chưa đúng: ' + name, cls: 'mistake', lines };
+    }
+    render();
+  }
+  function deleteReview() {
+    const c = PZ.cur && PZ.cur.rv; if (!c) return;
+    REV.cards = REV.cards.filter((x) => x !== c); saveReview(); updateReviewCount();
+    PZ.col = reviewCollection();
+    if (PZ.col.items.length) loadPuzzle(Math.min(PZ.idx, PZ.col.items.length - 1)); else loadPuzzle(0);
+  }
+
+  // ---------- Thống kê theo chủ đề: tỷ lệ giải đúng ngay lần đầu ----------
+  const TSTAT = store.get('themeStat', {});
+  function recordTheme(ok) {
+    if (PZ.recorded || !PZ.cur || PZ.col.review) return;
+    PZ.recorded = true;
+    const ts = PZ.cur.themes && PZ.cur.themes.length ? PZ.cur.themes : PZ.cur.theme ? [PZ.cur.theme] : [];
+    for (const t of ts) { const x = TSTAT[t] || (TSTAT[t] = [0, 0]); x[1]++; if (ok) x[0]++; }
+    store.set('themeStat', TSTAT);
+  }
+  function weakThemes() {
+    return Object.entries(TSTAT).filter(([, x]) => x[1] >= 3 && x[0] / x[1] < 0.7)
+      .map(([t, x]) => ({ t, ok: x[0], tot: x[1], r: (x[0] + 1) / (x[1] + 2) }))
+      .sort((a, b) => a.r - b.r).slice(0, 3);
+  }
+  function practiceTheme(t) {
+    const items = PZ.col.items;
+    const has = (p) => (p.themes || [p.theme]).includes(t);
+    for (let k = 1; k <= items.length; k++) {
+      const i = (PZ.idx + k) % items.length;
+      if (has(items[i]) && !isSolved(i)) return loadPuzzle(i);
+    }
+    for (let k = 1; k <= items.length; k++) { const i = (PZ.idx + k) % items.length; if (has(items[i])) return loadPuzzle(i); }
+    S.coach = { title: 'Không có bài "' + t + '" trong bộ này', cls: null, lines: ['Hãy chọn bộ khác, ví dụ Vu sư ma đề hoặc Sát trước đại toàn.'] };
+    render();
+  }
   // "k": chỉ số gốc của bài (giữ nguyên khi bộ đã lọc bài trùng)
   const pzKey = (i) => PZ.col.id + ':' + (PZ.col.items[i].k ?? i);
   // cùng thế cờ có mặt ở nhiều bộ: giải ở bộ nào cũng tính là đã giải
   PZ.solvedFen = new Set(store.get('solvedFen', []));
-  const isSolved = (i) => PZ.solved.has(pzKey(i)) || PZ.solvedFen.has(PZ.col.items[i].fen);
+  const isSolved = (i) => (PZ.col.review ? PZ.col.items[i].rv.due > Date.now() : PZ.solved.has(pzKey(i)) || PZ.solvedFen.has(PZ.col.items[i].fen));
 
   async function openCollection(id, idx) {
+    if (id === REV_ID) { PZ.col = reviewCollection(); store.set('pzCol', REV_ID); return loadPuzzle(PZ.col.items.length ? 0 : idx || 0); }
     let col = PZ.cache[id];
     if (!col) {
       try { col = await (await fetch('data/puzzles/' + id + '.json?v=2')).json(); PZ.cache[id] = col; }
@@ -787,12 +896,27 @@
   }
   function loadPuzzle(i) {
     const items = PZ.col.items;
-    if (!items.length) return;
+    if (!items.length) {
+      S.tok++; PZ.cur = null; S.pos = Pos.start(); S.hist = []; S.arrows = []; S.selected = -1; S.view = -1; S.state = 'empty'; S.userSide = RED;
+      S.coach = PZ.col.review
+        ? { title: 'Chưa có lỗi nào để ôn', cls: null, lines: ['Khi đấu với máy, mỗi nước Sai lầm (?) hoặc Nước hỏng (??) của bạn sẽ được lưu vào đây.', 'Ôn lại đúng những thế cờ mình từng đi sai là cách tiến bộ nhanh nhất. Thẻ làm đúng sẽ được giãn lịch ôn (1, 3, 7, 18… ngày), làm sai sẽ quay lại ngay.'] }
+        : { title: 'Bộ bài trống', cls: null, lines: [] };
+      render(); return;
+    }
     S.tok++;
     i = Math.max(0, Math.min(items.length - 1, i)); PZ.idx = i; PZ.cur = items[i]; store.set('pzIdx', i);
-    PZ.hintStep = 0; PZ.fails = 0;
-    S.userSide = RED;
+    PZ.hintStep = 0; PZ.fails = 0; PZ.hinted = false; PZ.recorded = false;
     S.pos = Pos.fromFen(PZ.cur.fen); S.hist = []; S.arrows = []; S.selected = -1; S.view = -1; S.state = 'user'; S.result = null;
+    S.userSide = PZ.col.review ? S.pos.side : RED;
+    if (PZ.col.review) {
+      const c = PZ.cur.rv;
+      S.coach = { title: 'Ôn lỗi · thẻ ' + (i + 1) + '/' + items.length, cls: null, lines: [
+        'Thế cờ từ ván của bạn (' + new Date(c.added).toLocaleDateString('vi') + '). Bạn cầm ' + sideName(S.pos.side) + '.',
+        'Lần đó bạn đi ' + c.playedName + ' và mất ' + (c.loss / 100).toFixed(1) + ' Tốt lợi thế. Hãy tìm nước tốt hơn.',
+        'Đã ôn ' + c.reps + ' lần · ' + fmtDue(c) + '.',
+      ] };
+      render(); return;
+    }
     const lines = ['Đỏ đi trước, chiếu bí trong ' + PZ.cur.n + ' nước. Máy sẽ chống đỡ bằng nước tốt nhất.'];
     if (PZ.cur.theme) lines.push('Đòn: ' + PZ.cur.theme + '. ' + (THEME_INFO[PZ.cur.theme] || ''));
     if (PZ.col.source) lines.push('Nguồn: ' + PZ.col.title + ' · ' + PZ.col.source);
@@ -807,6 +931,7 @@
   }
   const onSolPath = () => S.hist.every((h, i) => h.m === PZ.cur.sol[i]);
   async function onPuzzleMove(m) {
+    if (PZ.col.review) return onReviewMove(m);
     const tok = S.tok, before = S.pos.clone(), name = S.pos.moveName(m);
     const followed = onSolPath() && PZ.cur.sol[S.hist.length] === m;
     S.pos.make(m); S.hist.push({ m, name, by: 'user', before });
@@ -836,6 +961,7 @@
     render();
   }
   function puzzleFail(reply, msg) {
+    recordTheme(false);
     PZ.fails++;
     const h = S.hist[S.hist.length - 1], lines = [];
     if (msg) lines.push(msg);
@@ -852,10 +978,11 @@
     S.tok++;
     S.pos = S.hist[i].before.clone(); S.hist = S.hist.slice(0, i);
     S.arrows = []; S.selected = -1; S.state = 'user';
-    S.coach = { title: 'Thử lại', cls: null, lines: ['Còn ' + (PZ.cur.n - usedMoves()) + ' nước để chiếu bí. Hãy tìm nước chiếu mà đối phương không thoát được.'] };
+    S.coach = { title: 'Thử lại', cls: null, lines: [PZ.col.review ? 'Tìm nước tốt nhất cho ' + sideName(S.pos.side) + '. Bấm "Gợi ý" nếu cần.' : 'Còn ' + (PZ.cur.n - usedMoves()) + ' nước để chiếu bí. Hãy tìm nước chiếu mà đối phương không thoát được.'] };
     render();
   }
   function puzzleSolved() {
+    recordTheme(PZ.fails === 0 && !PZ.hinted);
     S.state = 'done'; S.arrows = [];
     PZ.solved.add(pzKey(PZ.idx)); store.set('solved', [...PZ.solved]);
     PZ.solvedFen.add(PZ.cur.fen); store.set('solvedFen', [...PZ.solvedFen]);
@@ -879,7 +1006,7 @@
       if (tok !== S.tok || !r) return;
       m = r.multi[0].move; score = r.multi[0].score;
     }
-    PZ.hintStep++;
+    PZ.hintStep++; PZ.hinted = true;
     if (PZ.hintStep === 1) {
       S.selected = m & 127;
       S.coach = { title: '💡 Gợi ý 1', cls: null, lines: ['Quân cần đi: ' + nameOf(S.pos.b[m & 127]) + ' (đang được chọn sẵn).', 'Bấm Gợi ý lần nữa để xem nước cụ thể.'] };
@@ -890,6 +1017,7 @@
     render();
   }
   async function showSolution() {
+    if (!PZ.cur) return;
     const tok = ++S.tok;
     S.pos = Pos.fromFen(PZ.cur.fen); S.hist = []; S.arrows = []; S.selected = -1; S.view = -1; S.state = 'demo';
     S.coach = { title: 'Lời giải bài ' + (PZ.idx + 1) + (PZ.cur.name ? ' · ' + PZ.cur.name : ''), cls: null, lines: [] };
@@ -902,6 +1030,13 @@
       const note = noteAt(S.hist.length); if (note) S.coach.lines.push('   ↳ ' + note);
       render();
     }
+    if (PZ.col.review) {
+      PZ.hinted = true; if (PZ.cur.rv.iv || PZ.cur.rv.due > Date.now()) gradeReview(PZ.cur.rv, false);
+      S.state = 'done'; S.coach.lines.push('Nước tốt nhất. Lúc trước bạn đi ' + PZ.cur.rv.playedName + '.');
+      S.coach.lines.push(...explain(Pos.fromFen(PZ.cur.fen), PZ.cur.sol[0]).map((x) => '• ' + x));
+      render(); return;
+    }
+    recordTheme(false);
     S.state = 'done'; S.coach.lines.push('Chiếu bí!' + (PZ.cur.theme ? ' ' + (THEME_INFO[PZ.cur.theme] || '') : ''));
     render();
   }
@@ -912,8 +1047,17 @@
     if (sel.dataset.sig !== opts) { sel.innerHTML = opts; sel.dataset.sig = opts; }
     const items = PZ.col.items;
     const done = items.filter((_, i) => isSolved(i)).length;
-    $('pzProgress').textContent = 'Đã giải ' + done + '/' + items.length;
+    $('pzProgress').textContent = PZ.col.review ? items.length - done + ' thẻ đến hạn / ' + items.length : 'Đã giải ' + done + '/' + items.length;
+    const weak = weakThemes();
+    const wh = PZ.col.review || !weak.length ? '' : '<div class="pzweak"><span class="muted small">Chủ đề cần luyện (giải đúng ngay lần đầu):</span>' +
+      weak.map((w) => `<button class="tag" data-theme="${esc(w.t)}" title="Mở bài chưa giải có đòn này">${esc(w.t)} <b>${w.ok}/${w.tot}</b></button>`).join('') + '</div>';
+    if ($('pzWeak').dataset.sig !== wh) { $('pzWeak').innerHTML = wh; $('pzWeak').dataset.sig = wh; }
     const groups = [];
+    if (PZ.col.review) {
+      const now = Date.now();
+      const part = (lab, f) => { const its = items.map((p, i) => [p, i]).filter(([p]) => f(p.rv)); return its.length ? `<div class="pzg"><div class="pzg-h">${lab} · ${its.length} thẻ</div><div class="pzgrid">` + its.map(([p, i]) => `<button class="pz${isSolved(i) ? ' ok' : ''}${i === PZ.idx ? ' cur' : ''}" data-pz="${i}" title="${esc(p.rv.playedName + ' → ' + p.rv.bestName)}">${i + 1}</button>`).join('') + '</div></div>' : ''; };
+      groups.push(part('Đến hạn ôn', (c) => c.due <= now), part('Đã thuộc, chờ ôn lại', (c) => c.due > now));
+    } else
     for (const n of [...new Set(items.map((p) => p.n))].sort((a, b) => a - b)) {
       const its = items.map((p, i) => [p, i]).filter(([p]) => p.n === n);
       groups.push(`<div class="pzg"><div class="pzg-h">Chiếu bí ${n} nước · ${its.length} bài</div><div class="pzgrid">` +
@@ -926,7 +1070,8 @@
     if (S.view >= 0) return '';
     let b = '';
     if (S.state === 'fail') b += '<button class="btn primary" data-act="pz-retry">Thử lại</button>';
-    if (S.state === 'done') b += '<button class="btn primary" data-act="pz-next">Bài tiếp theo →</button><button class="btn" data-act="pz-restart">Làm lại bài này</button>';
+    if (S.state === 'done') b += '<button class="btn primary" data-act="pz-next">' + (PZ.col.review ? 'Thẻ tiếp theo →' : 'Bài tiếp theo →') + '</button><button class="btn" data-act="pz-restart">Làm lại</button>';
+    if (PZ.col.review && PZ.cur && (S.state === 'done' || S.state === 'fail')) b += '<button class="btn" data-act="rv-del" title="Xoá thẻ này khỏi sổ lỗi sai">Bỏ thẻ</button>';
     return b ? '<div class="confirm">' + b + '</div>' : '';
   }
 
@@ -1073,8 +1218,9 @@
     renderPieces(); renderOverlay();
   });
   document.addEventListener('click', (e) => {
-    const t = e.target.closest('[data-act],[data-view],[data-pz],[data-mode],[data-pro],[data-gm]');
+    const t = e.target.closest('[data-act],[data-view],[data-pz],[data-mode],[data-pro],[data-gm],[data-theme]');
     if (!t) return;
+    if (t.dataset.theme != null) { practiceTheme(t.dataset.theme); return; }
     if (t.dataset.view != null && S.mode === 'games') { if (S.state !== 'ai') { GM.guess = false; S.userSide = RED; gmGoto(+t.dataset.view + 1); } return; }
     if (t.dataset.gm != null) { gmLoad(+t.dataset.gm); return; }
     if (t.dataset.view != null) {
@@ -1087,7 +1233,11 @@
     if (t.dataset.mode) { setMode(t.dataset.mode); return; }
     const a = t.dataset.act;
     if (a === 'pz-retry') retryPuzzle();
-    else if (a === 'pz-next') loadPuzzle(PZ.idx + 1 < PZ.col.items.length ? PZ.idx + 1 : 0);
+    else if (a === 'pz-next') {
+      if (PZ.col.review) { const id = PZ.cur && PZ.cur.rv; PZ.col = reviewCollection(); const due = PZ.col.items.findIndex((p) => p.rv.due <= Date.now()); loadPuzzle(due >= 0 ? due : Math.max(0, PZ.col.items.findIndex((p) => p.rv === id))); }
+      else loadPuzzle(PZ.idx + 1 < PZ.col.items.length ? PZ.idx + 1 : 0);
+    }
+    else if (a === 'rv-del') deleteReview();
     else if (a === 'gm-next') { S.coach.gmNext = false; gmGoto(GM.ply + 1); }
     else if (a === 'gm-first') gmGoto(0);
     else if (a === 'gm-last') { GM.guess = false; S.userSide = RED; gmGoto(GM.moves.length); }

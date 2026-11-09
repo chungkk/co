@@ -79,6 +79,72 @@ void main() {
     expect(g.selected, g.pzCur!.sol[0] & 127);
   });
 
+  test('sổ lỗi sai: lưu thẻ, làm sai rồi đúng, giãn lịch ôn', () async {
+    var now = DateTime(2026, 1, 1).millisecondsSinceEpoch;
+    g.clock = () => now;
+    final p = Pos.start();
+    p.make(moveNamed(p, 'Pháo 2 bình 5'));
+    final played = moveNamed(p, 'Tướng 5 tiến 1'), best = moveNamed(p, 'Mã 8 tiến 7');
+    expect(g.addReview(p, played, best, 250), isTrue);
+    expect(g.reviewDue, 1);
+    await g.setMode(Mode.puzzle);
+    await g.openCollection('on-loi');
+    expect(g.pzCol!.review, isTrue);
+    expect(g.userSide, BLACK); // thế cờ bên Đen đi: bàn cờ lật theo
+    expect(g.statusText, contains('tìm nước tốt nhất'));
+    // đi lại đúng nước sai cũ
+    g.tapSquare(played & 127);
+    g.tapSquare(played >> 7);
+    await waitFor(() => g.state == 'fail');
+    expect(g.reviews.single.lapses, 1);
+    expect(g.reviews.single.due, now);
+    g.retryPuzzle();
+    g.tapSquare(best & 127);
+    g.tapSquare(best >> 7);
+    await waitFor(() => g.state == 'done');
+    // đã sai trong lượt này nên chưa giãn lịch
+    expect(g.reviews.single.iv, 0);
+    // lượt sau: đúng ngay lần đầu → 1 ngày, rồi 3 ngày
+    g.nextPuzzle();
+    g.tapSquare(best & 127);
+    g.tapSquare(best >> 7);
+    await waitFor(() => g.state == 'done');
+    expect(g.reviews.single.iv, 1);
+    expect(g.isSolved(0), isTrue);
+    expect(g.reviewDue, 0);
+    now += 2 * 86400000;
+    expect(g.reviewDue, 1);
+    g.nextPuzzle();
+    g.tapSquare(best & 127);
+    g.tapSquare(best >> 7);
+    await waitFor(() => g.state == 'done');
+    expect(g.reviews.single.iv, 3);
+    // lưu bền và xoá thẻ
+    expect(g.store.get<List<dynamic>>('review', []).length, 1);
+    g.deleteReview();
+    expect(g.reviews, isEmpty);
+    expect(g.state, 'empty');
+  });
+
+  test('thống kê chủ đề: đi sai tính vào chủ đề yếu', () async {
+    await g.setMode(Mode.puzzle);
+    await g.openCollection('co-ban-sat-phap');
+    for (var i = 0; i < 3; i++) {
+      g.loadPuzzle(i);
+      final themes = g.pzCur!.allThemes;
+      expect(themes, isNotEmpty);
+      // nước sai: nước không chiếu bí (một số bài có nhiều đường chiếu bí)
+      final wrong = g.pos.legalMoves().firstWhere((m) => (g.pos.clone()..make(m)).legalMoves().isNotEmpty);
+      g.tapSquare(wrong & 127);
+      g.tapSquare(wrong >> 7);
+      await waitFor(() => g.state == 'fail', seconds: 3).catchError((_) => fail('bài $i: state=${g.state} hist=${g.hist.length} ${g.pzCur!.fen} sai=${Pos.fromFen(g.pzCur!.fen).moveName(wrong)}'));
+    }
+    expect(g.weakThemes.first.t, 'Bạch diện tướng');
+    expect(g.weakThemes.first.ok, 0);
+    g.practiceTheme('Bạch diện tướng');
+    expect(g.pzCur!.allThemes, contains('Bạch diện tướng'));
+  });
+
   test('mọi bộ bài tập và ván đại sư đều nạp được, nước đi hợp lệ', () async {
     await g.setMode(Mode.puzzle);
     for (final c in g.pzCols) {
