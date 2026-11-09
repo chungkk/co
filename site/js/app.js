@@ -139,8 +139,50 @@
     hist: [], state: 'user', pre: null, tok: 0, selected: -1, arrows: [], view: -1,
     coach: null, hintsUsed: 0, result: null, lastScore: 0,
     startFen: null, // null = thế ban đầu; khác: ván bắt đầu từ thế cờ này (tàn cục, ván nhập vào)
-    opt: Object.assign({ warn: true, threats: true, han: true }, store.get('opt', {})),
+    opt: Object.assign({ warn: true, threats: true, han: true, sound: true }, store.get('opt', {})),
   };
+
+  // ---------- Âm thanh (cùng bộ tiếng quân gỗ với bản iOS) ----------
+  // Trình duyệt chỉ cho phát âm thanh sau khi người dùng chạm/bấm: tải và giải mã ở lần chạm đầu.
+  const SFX = {
+    files: { move: ['move1', 'move2', 'move3'], capture: ['capture1', 'capture2'], check: ['check'], select: ['select'], win: ['win'], end: ['end'], fail: ['fail'] },
+    ctx: null, buf: {}, last: '', n: 0, mode: null,
+  };
+  function sfxInit() {
+    if (SFX.ctx) { if (SFX.ctx.state === 'suspended') SFX.ctx.resume().catch(() => {}); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    try { SFX.ctx = new AC(); } catch (e) { return; }
+    for (const list of Object.values(SFX.files)) {
+      for (const f of list) {
+        fetch('sfx/' + f + '.m4a').then((r) => r.arrayBuffer()).then((b) => SFX.ctx.decodeAudioData(b)).then((d) => { SFX.buf[f] = d; }).catch(() => {});
+      }
+    }
+  }
+  addEventListener('pointerdown', sfxInit, { capture: true });
+  addEventListener('keydown', sfxInit, { capture: true });
+  // phát tiếng [kind]; delay: chờ quân trượt tới nơi rồi mới "cạch"
+  function sfx(kind, delay) {
+    if (!S.opt.sound || !SFX.ctx) return;
+    const list = SFX.files[kind]; if (!list) return;
+    let f = list[(Math.random() * list.length) | 0];
+    if (list.length > 1 && f === SFX.last) f = list[(list.indexOf(f) + 1) % list.length]; // không lặp biến thể liền nhau
+    SFX.last = f;
+    const play = () => {
+      const b = SFX.buf[f]; if (!b || !SFX.ctx) return;
+      try { const src = SFX.ctx.createBufferSource(); src.buffer = b; src.connect(SFX.ctx.destination); src.start(); } catch (e) { /* bỏ qua */ }
+    };
+    if (delay > 0) setTimeout(play, delay); else play();
+  }
+  // tiếng cho nước vừa đi: chỉ khi ván tiến thêm đúng một nước (không kêu khi tua, đi lại, đổi ván)
+  function sfxMove() {
+    const n = S.hist.length;
+    if (n === SFX.n + 1 && S.mode === SFX.mode) {
+      const last = S.hist[n - 1];
+      sfx(S.pos.inCheck(S.pos.side) ? 'check' : last.before && last.before.b[last.m >> 7] ? 'capture' : 'move', 200);
+    }
+    SFX.n = n; SFX.mode = S.mode;
+  }
 
   // ---------- Tiện ích phân tích ----------
   const sgn = (p) => (p > 0 ? 1 : -1);
@@ -368,6 +410,7 @@
         S.arrows = [{ m, kind: 'bad' }];
       }
       S.coach = { title: '✗ ' + name + ': ' + (y ? 'nước hiếm' : 'ngoài sách'), cls: 'mistake', lines };
+      sfx('fail');
       S.selected = -1; render(); return;
     }
     d.tot++; if (d.fails === 0) d.ok++;
@@ -573,6 +616,10 @@
     const myTurn = st.status === 'playing' && OL.side && S.pos.side === OL.side;
     S.state = myTurn ? 'user' : 'online-wait';
     S.coach = olCoach(st);
+    if (st.status === 'over' && prev && prev.status !== 'over' && prev.room === st.room) {
+      const w = st.result.winner;
+      sfx(OL.side && w === sk(OL.side) ? 'win' : 'end', 300);
+    }
     if (myTurn && document.hidden) document.title = '● Đến lượt bạn · Cờ Tướng';
     render();
   }
@@ -740,7 +787,7 @@
     } else if (S.hist.length >= 300) {
       S.result = { winner: 0, text: 'Hòa do ván cờ quá dài.' };
     }
-    if (S.result) { S.state = 'over'; S.arrows = []; S.coach = summaryCoach(); save(); render(); return true; }
+    if (S.result) { S.state = 'over'; S.arrows = []; S.coach = summaryCoach(); save(); render(); sfx(S.result.winner === S.userSide ? 'win' : 'end', 480); return true; }
     return false;
   }
   function summaryCoach() {
@@ -1044,6 +1091,7 @@
     }
     if (last) lastAnimated = last;
     piecesEl.innerHTML = html.join('');
+    sfxMove();
   }
 
   function arrowSvg(m, kind) {
@@ -1207,7 +1255,7 @@
     renderPieces(); renderOverlay(); renderCoach(); renderMoves(); renderStatus(); if (S.mode === 'play') renderEval(); renderPuzzle(); renderPro(); renderGames();
     $('level').value = S.level; $('side').value = S.userSide;
     $('engInfo').textContent = REMOTE.used === true ? 'Máy chấm: Pikafish trên máy chủ (mạnh, cần mạng).' : REMOTE.used === false ? 'Máy chấm: engine trong trình duyệt (không kết nối được máy chủ Pikafish).' : '';
-    $('optWarn').checked = S.opt.warn; $('optThreats').checked = S.opt.threats; $('optHan').checked = S.opt.han;
+    $('optWarn').checked = S.opt.warn; $('optThreats').checked = S.opt.threats; $('optHan').checked = S.opt.han; $('optSound').checked = S.opt.sound;
   }
 
 
@@ -1299,6 +1347,7 @@
       lines.push('Lúc trước bạn đã đi ' + c.playedName + ' và mất ' + (c.loss / 100).toFixed(1) + ' Tốt lợi thế.');
       lines.push(PZ.fails || PZ.hinted ? 'Thẻ này sẽ được ôn lại sớm vì bạn chưa làm đúng ngay lần đầu.' : 'Thẻ này: ' + fmtDue(c) + '.');
       S.coach = { title: '✓ ' + name + ': chính xác!', cls: 'best', lines };
+      sfx('win', 300);
     } else {
       PZ.fails++;
       S.state = 'fail';
@@ -1306,6 +1355,7 @@
       const lines = [m === c.played ? 'Đây chính là nước bạn đã đi sai lần trước.' : 'Nước này kém nước tốt nhất khoảng ' + (loss / 100).toFixed(1) + ' Tốt.'];
       lines.push('Bấm "Thử lại" để tìm nước khác, hoặc "Gợi ý" sau khi thử lại.');
       S.coach = { title: '✗ Chưa đúng: ' + name, cls: 'mistake', lines };
+      sfx('fail', 350);
     }
     render();
   }
@@ -1438,6 +1488,7 @@
     render();
   }
   function puzzleFail(reply, msg) {
+    sfx('fail', 350);
     recordTheme(false);
     PZ.fails++;
     const h = S.hist[S.hist.length - 1], lines = [];
@@ -1459,6 +1510,7 @@
     render();
   }
   function puzzleSolved() {
+    sfx('win', 480);
     recordTheme(PZ.fails === 0 && !PZ.hinted);
     S.state = 'done'; S.arrows = [];
     PZ.solved.add(pzKey(PZ.idx)); store.set('solved', [...PZ.solved]);
@@ -1732,7 +1784,7 @@
       const m = S.selected | (sq << 7);
       if (S.pos.isLegal(m)) { if (S.mode === 'puzzle') onPuzzleMove(m); else if (S.mode === 'games') onGuessMove(m); else if (S.mode === 'online') olMove(m); else if (S.drill) onDrillMove(m); else onUserMove(m); return; }
     }
-    if (p && sgn(p) === S.userSide) S.selected = sq === S.selected ? -1 : sq;
+    if (p && sgn(p) === S.userSide) { S.selected = sq === S.selected ? -1 : sq; if (S.selected >= 0) sfx('select'); }
     else S.selected = -1;
     renderPieces(); renderOverlay();
   });
@@ -1808,10 +1860,10 @@
     newGame(true);
   };
   const optChange = () => {
-    S.opt = { warn: $('optWarn').checked, threats: $('optThreats').checked, han: $('optHan').checked };
+    S.opt = { warn: $('optWarn').checked, threats: $('optThreats').checked, han: $('optHan').checked, sound: $('optSound').checked };
     store.set('opt', S.opt); render();
   };
-  ['optWarn', 'optThreats', 'optHan'].forEach((id) => ($(id).onchange = optChange));
+  ['optWarn', 'optThreats', 'optHan', 'optSound'].forEach((id) => ($(id).onchange = optChange));
   document.addEventListener('keydown', (e) => {
     if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
     if (S.mode === 'online' && e.key !== 'Escape') return; // không gợi ý/đi lại khi chơi online
