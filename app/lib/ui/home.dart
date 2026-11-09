@@ -246,7 +246,7 @@ class HomePage extends StatelessWidget {
       );
       if (ok != true) return;
     }
-    g.newGame(keepSide: true);
+    g.newGame(); // theo bên đã chọn, không giữ bên của ván đánh tiếp/ván nhập/ván online vừa phân tích
   }
 }
 

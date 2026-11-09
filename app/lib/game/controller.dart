@@ -950,6 +950,8 @@ class GameController extends ChangeNotifier {
 
   bool _restore() {
     final g = store.get<Map<String, dynamic>?>('game', null);
+    final hold = _hold;
+    _hold = false; // chỉ áp dụng cho lần khôi phục ngay sau playFrom
     drill = null;
     if (g == null || g['moves'] == null || ((g['moves'] as List).isEmpty && g['fen'] == null)) return false;
     try {
@@ -978,13 +980,11 @@ class GameController extends ChangeNotifier {
           Coach('Tiếp tục ván cũ', lines: ['Ván cờ trước đã được khôi phục.${gameTitle != null ? ' ($gameTitle)' : ''}']);
       _pendingCoach = null;
       _render();
-      if (_hold && pos.side != userSide && pos.legalMoves().isNotEmpty) {
+      if (hold && pos.side != userSide && pos.legalMoves().isNotEmpty) {
         // giữ nguyên thế cờ (máy chưa đi tiếp) cho tới khi người chơi bấm phân tích
-        _hold = false;
         state = 'user';
         _render();
       } else if (!_checkOver()) {
-        _hold = false;
         if (pos.side == userSide) {
           _startUserTurn();
         } else {

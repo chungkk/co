@@ -147,8 +147,9 @@ void main() {
     expect(g2.pos.toFen(), g.pos.toFen());
     expect(g2.gameTitle, g.gameTitle);
     g2.dispose();
-    // ván mới trở về thế ban đầu
+    // ván mới trở về thế ban đầu, theo bên đã chọn (không giữ bên của ván tàn cục)
     g.newGame();
+    expect(g.userSide, RED);
     expect(g.startFen, isNull);
     expect(g.pos.toFen(), Pos.start().toFen());
   });

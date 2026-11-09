@@ -755,6 +755,7 @@
   }
   function restore() {
     const g = store.get('game', null);
+    const hold = S.hold; S.hold = false; // chỉ áp dụng cho lần khôi phục ngay sau playFrom
     S.drill = null;
     if (!g || !g.moves || (!g.moves.length && !g.fen)) return false;
     try {
@@ -770,8 +771,8 @@
       S.coach = S.pendingCoach || { title: 'Tiếp tục ván cũ', cls: null, lines: ['Ván cờ trước đã được khôi phục.' + (S.gameTitle ? ' (' + S.gameTitle + ')' : '')] };
       S.pendingCoach = null;
       render();
-      if (S.hold && S.pos.side !== S.userSide && S.pos.legalMoves().length) { S.hold = false; S.state = 'user'; S.result = null; render(); }
-      else if (!checkOver()) { S.hold = false; if (S.pos.side === S.userSide) startUserTurn(); else aiTurn(); }
+      if (hold && S.pos.side !== S.userSide && S.pos.legalMoves().length) { S.state = 'user'; S.result = null; render(); }
+      else if (!checkOver()) { if (S.pos.side === S.userSide) startUserTurn(); else aiTurn(); }
       return true;
     } catch (e) { S.startFen = null; S.gameTitle = null; return false; }
   }
@@ -1853,7 +1854,8 @@
   $('gmCol').onchange = (e) => gmOpenCol(e.target.value, 0);
   $('gmFilter').oninput = (e) => { GM.filter = e.target.value; renderGames(); };
   $('newBtn').onclick = () => {
-    if (S.drill) { newGame(true); return; } if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi và bắt đầu ván mới?')) return; newGame(true); };
+    // ván mới luôn theo bên đã chọn ở "Cầm quân" (không giữ bên của ván đánh tiếp/ván nhập/ván online vừa phân tích)
+    if (S.drill) { newGame(false); return; } if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi và bắt đầu ván mới?')) return; newGame(false); };
   $('level').onchange = (e) => { S.level = +e.target.value; store.set('level', S.level); };
   $('side').onchange = (e) => {
     S.userSide = +e.target.value; store.set('side', S.userSide);
