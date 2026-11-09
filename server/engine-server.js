@@ -1,4 +1,5 @@
 // Máy chủ phân tích: chạy sẵn vài tiến trình Pikafish (UCI) và trả lời POST /api/analyse.
+// Kèm chơi online (server/online.js): /api/online/*.
 // Không dùng thư viện ngoài. Biến môi trường:
 //   PIKAFISH   đường dẫn file chạy (mặc định /opt/pikafish/pikafish); pikafish.nnue nằm cùng thư mục
 //   ENGINES    số tiến trình engine (mặc định 2), mỗi tiến trình 1 luồng
@@ -9,6 +10,7 @@
 const http = require('http');
 const { spawn } = require('child_process');
 const path = require('path');
+const online = require('./online.js');
 
 const BIN = process.env.PIKAFISH || '/opt/pikafish/pikafish';
 const ENGINES = Math.max(1, +process.env.ENGINES || 2);
@@ -140,6 +142,9 @@ const server = http.createServer((req, res) => {
     res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' });
     return res.end();
   }
+  // sau proxy (Coolify/Traefik → nginx): địa chỉ thật là phần đầu của X-Forwarded-For
+  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress).split(',')[0].trim();
+  if (online.handle(req, res, ip, send)) return;
   if (req.url === '/api/health') return send(res, 200, { ok: pool.some((e) => e.ready), engines: pool.length, queue: queue.length, cache: cache.size });
   if (req.url !== '/api/analyse' || req.method !== 'POST') return send(res, 404, { error: 'not found' });
   let body = '';
@@ -151,8 +156,6 @@ const server = http.createServer((req, res) => {
     if (!FEN_RE.test(fen)) return send(res, 400, { error: 'bad fen' });
     const mpv = Math.min(MAX_PV, Math.max(1, q.multipv | 0 || 1));
     const ms = Math.min(MAX_MS, Math.max(MIN_MS, q.ms | 0 || 1000));
-    // sau proxy (Coolify/Traefik → nginx): địa chỉ thật là phần đầu của X-Forwarded-For
-    const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress).split(',')[0].trim();
     const t0 = Date.now();
     try {
       const r = await analyse(fen, mpv, ms, ip);

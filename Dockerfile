@@ -37,6 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends nodejs libstdc+
  && rm -rf /var/lib/apt/lists/*
 COPY --from=pikafish /opt/pikafish /opt/pikafish
 COPY server/ /opt/engine-server/
+# luật cờ dùng chung với bản web để máy chủ kiểm tra nước đi khi chơi online
+COPY site/js/engine.js /opt/engine-server/engine.js
 COPY server/90-engine-server.sh /docker-entrypoint.d/90-engine-server.sh
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY site/ /usr/share/nginx/html/

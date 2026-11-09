@@ -9,6 +9,14 @@ Web tĩnh (HTML/CSS/JS thuần), deploy tại https://co.halle.biz qua Coolify t
 
 Chạy thử: `cd site && python3 -m http.server 8765`
 
+## Chơi online (không cần tài khoản)
+`server/online.js` (chạy chung tiến trình với `server/engine-server.js`): phòng chơi trong bộ nhớ, máy chủ kiểm tra luật (dùng `site/js/engine.js`) và đồng hồ.
+- `POST /api/online/quick|new|join|act`, trạng thái qua Server-Sent Events `GET /api/online/events?room=&token=` (nginx tắt đệm cho đường này).
+- Mỗi máy tự sinh token bí mật (localStorage / SharedPreferences) để vào lại ván; tên hiển thị tự chọn. Link mời: `https://co.halle.biz/?p=MÃPHÒNG`.
+- Đồng hồ 3+2, 5+3, 10+5, 15+10, 30+0; hết giờ thua. Xin hòa, đầu hàng, ván mới (đổi bên), người thứ ba vào phòng là người xem.
+- Phòng nằm trong bộ nhớ: deploy lại thì các ván đang chơi mất.
+- Kiểm tra: `node server/test/online.test.js`; app: `ONLINE_TEST_URL=http://127.0.0.1:8081/api/online/ flutter test test/online_test.dart` (khi engine-server đang chạy).
+
 ## Máy chấm Pikafish (máy chủ)
 Thầy chấm nước, gợi ý, phân tích ván, đoán nước đại sư và ôn lỗi gọi `POST /api/analyse` tới
 [Pikafish](https://github.com/official-pikafish/Pikafish) chạy trên máy chủ (`server/engine-server.js`, Node không cần thư viện).

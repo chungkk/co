@@ -12,8 +12,9 @@ import '../engine/engine_service.dart';
 import 'analysis.dart';
 import 'constants.dart';
 import 'notation.dart';
+import 'online.dart';
 
-enum Mode { play, puzzle, games }
+enum Mode { play, puzzle, games, online }
 
 class Arrow {
   final int m;
@@ -117,6 +118,14 @@ class GameController extends ChangeNotifier {
   String? startFen;
   String? gameTitle;
   Coach? _pendingCoach;
+  bool _hold = false;
+
+  // Chơi online
+  late final OnlineClient online;
+  String olName = '', olTc = '10+5';
+
+  /// Bên mình trong ván online (0: đang xem hoặc chưa vào phòng)
+  int olSide = 0;
   Pos _startPos() => startFen != null ? Pos.fromFen(startFen!) : Pos.start();
 
   /// Tăng mỗi khi có nước đi mới, để bàn cờ biết khi nào cần chạy hiệu ứng.
@@ -183,6 +192,17 @@ class GameController extends ChangeNotifier {
     pzSolved = store.get<List<dynamic>>('solved', []).map((x) => x is int ? 'thuc-chien:${x - 1}' : x as String).toSet();
     pzSolvedFen = store.get<List<dynamic>>('solvedFen', []).cast<String>().toSet();
     gmKeyOnly = store.get<bool>('gmKey', true);
+    olName = store.get<String>('olName', '');
+    olTc = store.get<String>('olTc', '10+5');
+    online = OnlineClient(
+      token: store.get<String?>('olToken', null),
+      room: store.get<String?>('olRoom', null),
+      onState: _olState,
+      onChange: _render,
+      saveRoom: (r) => store.set('olRoom', r),
+    );
+    store.set('olToken', online.token);
+    online.onGone = (_) => _olLobby();
     reviews = [
       for (final x in store.get<List<dynamic>>('review', []))
         if (x is Map<String, dynamic>) ReviewCard.fromJson(x),
@@ -224,6 +244,7 @@ class GameController extends ChangeNotifier {
     _disposed = true;
     tok++; // huỷ các tác vụ đang chờ (máy đáp, tự đi nước…)
     engine.dispose();
+    online.dispose();
     super.dispose();
   }
 
@@ -538,6 +559,7 @@ class GameController extends ChangeNotifier {
     String? title,
     required List<String> lines,
     bool mine = false,
+    bool hold = false,
   }) async {
     final p = fen != null ? Pos.fromFen(fen) : Pos.start();
     final ms = <Map<String, dynamic>>[];
@@ -547,6 +569,7 @@ class GameController extends ChangeNotifier {
     }
     store.set('game', {'side': side, 'fen': fen, 'title': title, 'moves': ms, 'hints': 0});
     _pendingCoach = Coach(title ?? 'Ván mới từ thế cờ', lines: lines);
+    _hold = hold;
     if (mode == Mode.play) {
       tok++;
       engine.reset();
@@ -700,6 +723,185 @@ class GameController extends ChangeNotifier {
     }
   }
 
+  // ---------- Chơi online ----------
+  void _olLobby() {
+    olSide = 0;
+    pos = Pos.start();
+    hist = [];
+    arrows = [];
+    selected = -1;
+    view = -1;
+    state = 'online-lobby';
+    userSide = RED;
+    moveSerial++;
+    coach = Coach(
+      'Chơi online',
+      lines: [
+        'Chọn "Tìm đối thủ ngẫu nhiên" để chơi ngay với người đang chờ, hoặc tạo phòng rồi gửi mã phòng cho bạn bè.',
+        'Không cần tài khoản. Trong ván không có gợi ý của máy; sau ván có thể nhờ Pikafish phân tích.',
+      ],
+    );
+    _render();
+  }
+
+  void _olEnter() {
+    if (online.room != null) {
+      pos = Pos.start();
+      hist = [];
+      state = 'online-wait';
+      online.st = null;
+      coach = Coach('Đang vào lại phòng ${online.room}…', busy: true);
+      _render();
+      online.connect();
+    } else {
+      _olLobby();
+    }
+  }
+
+  Future<void> olStart(String kind, {String? code}) async {
+    store.set('olName', olName);
+    store.set('olTc', olTc);
+    await online.start(kind, name: olName, tc: olTc, code: code?.trim().toUpperCase());
+  }
+
+  String olNameOf(Map<String, dynamic> st, int side) =>
+      (st['names'][side == RED ? 'r' : 'b'] as String?) ?? (st['status'] == 'waiting' ? 'Đang chờ…' : '?');
+
+  void _olState(Map<String, dynamic> st) {
+    if (mode != Mode.online) return;
+    olSide = (st['you'] as int?) ?? 0;
+    userSide = olSide != 0 ? olSide : RED;
+    final moves = (st['moves'] as List).cast<int>();
+    final same = hist.length == moves.length && [for (var i = 0; i < moves.length; i++) hist[i].m == moves[i]].every((x) => x);
+    if (!same) {
+      final p = Pos.start(), h = <HistEntry>[];
+      for (final m in moves) {
+        if (!p.isLegal(m)) break;
+        final b = p.clone();
+        h.add(HistEntry(m, p.moveName(m), b.side == olSide ? 'user' : 'ai', b));
+        p.make(m);
+      }
+      final forward = h.length == hist.length + 1 && hist.every((e) => h[hist.indexOf(e)].m == e.m);
+      hist = h;
+      pos = p;
+      selected = -1;
+      view = -1;
+      if (forward && h.isNotEmpty) {
+        _moved(p, h.last.m, h.last.before.b[h.last.m >> 7] != 0);
+      } else {
+        moveSerial++;
+      }
+    }
+    arrows = [];
+    final myTurn = st['status'] == 'playing' && olSide != 0 && pos.side == olSide;
+    final wasOver = state == 'online-over';
+    state = myTurn ? 'user' : (st['status'] == 'over' ? 'online-over' : 'online-wait');
+    if (state == 'online-over' && !wasOver) _fx(olSide != 0 && st['result']?['winner'] == (olSide == RED ? 'r' : 'b') ? 'win' : 'end');
+    coach = _olCoach(st);
+    _render();
+  }
+
+  Coach _olCoach(Map<String, dynamic> st) {
+    final me = olSide, opp = me != 0 ? -me : BLACK;
+    String k(int s) => s == RED ? 'r' : 'b';
+    if (st['status'] == 'waiting') {
+      final quick = st['quick'] == true || online.kind == 'quick';
+      return Coach(
+        quick ? 'Đang tìm đối thủ…' : 'Phòng ${st['room']}: đang chờ bạn bè',
+        busy: true,
+        lines: quick
+            ? ['Ván ${st['tc']}. Ván bắt đầu ngay khi có người cùng tìm đối thủ với thời gian này.']
+            : [
+                'Gửi mã phòng ${st['room']} cho bạn bè (nhập ở tab Chơi online, trên app hoặc trang co.halle.biz). Ván bắt đầu khi bạn bè vào phòng.',
+                'Bạn cầm ${sideName(me)} · thời gian ${st['tc']}.',
+              ],
+      );
+    }
+    if (st['status'] == 'over') {
+      final r = st['result'] as Map<String, dynamic>;
+      final w = r['winner'] == 'r' ? RED : (r['winner'] == 'b' ? BLACK : 0);
+      final why = onlineReason[r['reason']] ?? '';
+      final title = w == 0
+          ? 'Hòa ($why)'
+          : me == 0
+          ? '${sideName(w)} thắng ($why)'
+          : (w == me ? '🎉 Bạn thắng! ($why)' : 'Bạn thua ($why)');
+      final rm = st['rematch'] as Map<String, dynamic>;
+      return Coach(
+        title,
+        cls: w == 0 ? null : (w == me ? 'best' : 'mistake'),
+        lines: [
+          if (me != 0 && rm[k(opp)] == true && rm[k(me)] != true) 'Đối thủ muốn chơi ván mới.',
+          if (me != 0 && rm[k(me)] == true) 'Đang chờ đối thủ đồng ý chơi ván mới…',
+          'Bấm "Phân tích ván này" để Pikafish chấm từng nước của bạn; các nước sai sẽ vào sổ "Ôn lỗi sai".',
+        ],
+      );
+    }
+    if (me == 0) {
+      return Coach('Đang xem: ${olNameOf(st, RED)} – ${olNameOf(st, BLACK)}', lines: ['Bạn đang xem ván (phòng đã đủ hai người).']);
+    }
+    final last = hist.isEmpty ? null : hist.last;
+    return Coach(
+      pos.side == me ? (pos.inCheck(me) ? 'Bạn đang bị chiếu!' : 'Đến lượt bạn') : 'Đối thủ đang nghĩ…',
+      lines: [
+        if (last != null) 'Nước vừa đi: ${last.by == 'user' ? 'Bạn' : olNameOf(st, opp)} · ${last.name}',
+        if (st['drawOffer'] == k(opp)) 'Đối thủ đề nghị hòa.',
+        if (st['drawOffer'] == k(me)) 'Đã đề nghị hòa, đang chờ đối thủ trả lời.',
+        if (st['online'][k(opp)] != true) 'Đối thủ đang mất kết nối. Đồng hồ của họ vẫn chạy.',
+      ],
+    );
+  }
+
+  Future<void> _olMove(int m) async {
+    if (online.st == null) return;
+    final ply = hist.length;
+    // hiện ngay trên bàn cờ, máy chủ xác nhận sau
+    final before = pos.clone(), name = pos.moveName(m), cap = pos.b[m >> 7] != 0;
+    pos.make(m);
+    _moved(pos, m, cap);
+    hist.add(HistEntry(m, name, 'user', before));
+    selected = -1;
+    state = 'online-wait';
+    coach = Coach('Đối thủ đang nghĩ…', lines: ['Bạn đi: $name']);
+    _render();
+    final err = await online.act('move', {'move': m, 'ply': ply});
+    if (err != null) {
+      online.err = err;
+      if (online.st != null) _olState(online.st!);
+    }
+  }
+
+  Future<void> olAct(String act) async {
+    final err = await online.act(act);
+    if (err != null) {
+      online.err = err;
+      _render();
+    }
+  }
+
+  Future<void> olLeave() async {
+    await online.leave();
+    _olLobby();
+  }
+
+  /// Chép ván online sang "Đấu với máy" để phân tích bằng Pikafish
+  Future<void> olAnalyze() async {
+    final st = online.st;
+    if (st == null) return;
+    online.close();
+    await playFrom(
+      moves: (st['moves'] as List).cast<int>(),
+      side: olSide != 0 ? olSide : RED,
+      title: 'Ván online ${olNameOf(st, RED)} – ${olNameOf(st, BLACK)}',
+      mine: true,
+      hold: true,
+      lines: [
+        'Đã chép ván online (${(st['moves'] as List).length} nửa nước) sang "Đấu với máy".',
+        'Bấm "Phân tích ván" để Pikafish chấm từng nước của bạn.',
+      ],
+    );
+  }
+
   // ---------- Luồng ván cờ ----------
   void _save() {
     if (mode != Mode.play) return;
@@ -776,7 +978,13 @@ class GameController extends ChangeNotifier {
           Coach('Tiếp tục ván cũ', lines: ['Ván cờ trước đã được khôi phục.${gameTitle != null ? ' ($gameTitle)' : ''}']);
       _pendingCoach = null;
       _render();
-      if (!_checkOver()) {
+      if (_hold && pos.side != userSide && pos.legalMoves().isNotEmpty) {
+        // giữ nguyên thế cờ (máy chưa đi tiếp) cho tới khi người chơi bấm phân tích
+        _hold = false;
+        state = 'user';
+        _render();
+      } else if (!_checkOver()) {
+        _hold = false;
         if (pos.side == userSide) {
           _startUserTurn();
         } else {
@@ -1156,12 +1364,14 @@ class GameController extends ChangeNotifier {
   }
 
   bool get canUndo {
+    if (mode == Mode.online) return false;
     if (mode == Mode.puzzle) return state != 'ai' && pzCur != null;
     if (mode == Mode.games) return gmGame != null && gmPly > 0 && state != 'ai';
     return hist.any((h) => h.by == 'user') && state != 'ai';
   }
 
   bool get canHint {
+    if (mode == Mode.online) return false;
     if (mode == Mode.games) return gmGame != null && gmPly < gmMoves.length && state != 'ai' && state != 'user';
     return state == 'user' && view < 0;
   }
@@ -1192,6 +1402,12 @@ class GameController extends ChangeNotifier {
   }
 
   String get statusText {
+    if (mode == Mode.online) {
+      if (view >= 0) return 'Đang xem lại nước ${view + 1}';
+      if (online.room == null) return 'Chơi online';
+      if (online.st == null) return 'Đang kết nối…';
+      return coach?.title ?? '';
+    }
     if (mode == Mode.games) {
       if (gmGame == null) return 'Đang tải…';
       if (state == 'user') return 'Đến lượt ${sideName(gmSide)}: đại sư sẽ đi nước nào?';
@@ -1224,12 +1440,13 @@ class GameController extends ChangeNotifier {
     if (drill != null && state == 'ai') return 'Máy đi theo đại sư…';
     if (state == 'ai') return coach != null && coach!.busy ? 'Thầy đang chấm nước của bạn…' : 'Máy đang nghĩ…';
     if (state == 'confirm') return 'Bạn có chắc muốn đi nước này?';
+    if (state == 'user' && pos.side != userSide) return 'Bấm "Phân tích ván" để thầy chấm các nước của bạn';
     if (drill != null) return 'Luyện khai cuộc: nước ${hist.length ~/ 2 + 1}, đến lượt bạn';
     return pos.inCheck(pos.side) ? 'Bạn đang bị chiếu!' : 'Đến lượt bạn (${sideName(userSide)})';
   }
 
   bool get statusThinking => state == 'ai' || state == 'demo' || state == 'analyze';
-  bool get statusAlert => mode == Mode.play && state == 'user' && view < 0 && pos.inCheck(pos.side);
+  bool get statusAlert => (mode == Mode.play || mode == Mode.online) && state == 'user' && view < 0 && pos.inCheck(pos.side);
 
   /// Thông tin hiển thị khi đang xem lại một nước
   Coach? get shownCoach {
@@ -1273,6 +1490,8 @@ class GameController extends ChangeNotifier {
           _onPuzzleMove(m);
         } else if (mode == Mode.games) {
           _onGuessMove(m);
+        } else if (mode == Mode.online) {
+          _olMove(m);
         } else if (drill != null) {
           _onDrillMove(m);
         } else {
@@ -1351,6 +1570,7 @@ class GameController extends ChangeNotifier {
 
   Future<void> setMode(Mode m) async {
     if (_mode == m) return;
+    if (_mode == Mode.online) online.close(); // ván online vẫn tiếp tục trên máy chủ; quay lại tab sẽ vào lại
     tok++;
     engine.reset();
     _mode = m;
@@ -1365,6 +1585,8 @@ class GameController extends ChangeNotifier {
       await openCollection(store.get<String>('pzCol', 'thuc-chien'), store.get<int>('pzIdx', 0));
     } else if (m == Mode.games) {
       await _gmEnter();
+    } else if (m == Mode.online) {
+      _olEnter();
     } else {
       userSide = store.get<int>('side', RED);
       if (!_restore()) newGame();

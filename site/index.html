@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@700&text=%E5%B8%A5%E4%BB%95%E7%9B%B8%E5%82%8C%E4%BF%A5%E7%82%AE%E5%85%B5%E5%B0%87%E5%A3%AB%E8%B1%A1%E9%A6%AC%E8%BB%8A%E7%A0%B2%E5%8D%92%E6%A5%9A%E6%B2%B3%E6%BC%A2%E7%95%8C&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=9">
+<link rel="stylesheet" href="css/style.css?v=10">
 </head>
 <body>
 <header class="top">
@@ -20,6 +20,7 @@
     <button data-mode="play">Đấu với máy</button>
     <button data-mode="puzzle">Bài tập sát cục</button>
     <button data-mode="games">Ván đại sư</button>
+    <button data-mode="online">Chơi online</button>
   </nav>
   <div class="controls play-only">
     <label>Cấp độ
@@ -66,6 +67,26 @@
       <button class="btn" id="undoBtn">↶ Đi lại <kbd>U</kbd></button>
     </div>
     <div class="coach" id="coach" aria-live="polite"></div>
+    <div class="card online-only">
+      <div class="card-h">Chơi online <span class="muted small" id="olInfo"></span></div>
+      <div id="olLobby">
+        <label class="ol-row">Tên của bạn <input id="olName" class="full" maxlength="20" placeholder="Để trống: tự đặt tên Khách…" autocomplete="nickname"></label>
+        <label class="ol-row">Thời gian (phút + giây mỗi nước)
+          <select id="olTc" class="full"><option value="3+2">3 + 2 (chớp)</option><option value="5+3">5 + 3 (nhanh)</option><option value="10+5">10 + 5</option><option value="15+10">15 + 10</option><option value="30+0">30 phút</option></select>
+        </label>
+        <button class="btn primary full ol-btn" data-act="ol-quick">⚡ Tìm đối thủ ngẫu nhiên</button>
+        <button class="btn full ol-btn" data-act="ol-new">Tạo phòng, mời bạn bè</button>
+        <div class="ol-join"><input id="olCode" class="full" maxlength="8" placeholder="Nhập mã phòng" autocapitalize="characters" autocomplete="off"><button class="btn" data-act="ol-join">Vào</button></div>
+        <p class="small ol-err" id="olErr" role="status"></p>
+        <p class="muted small">Không cần tài khoản. Trong ván không có gợi ý của máy; hết ván có thể nhờ Pikafish phân tích.</p>
+      </div>
+      <div id="olGame" hidden>
+        <div id="olPlayers"></div>
+        <div id="olShare"></div>
+        <div class="ol-actions" id="olActions"></div>
+        <p class="small ol-err" id="olErr2" role="status"></p>
+      </div>
+    </div>
     <div class="card play-only">
       <div class="card-h">Khai cuộc đại sư <span class="muted small">từ 104.186 ván giải đấu</span></div>
       <div id="pro"></div>
@@ -127,6 +148,6 @@
 <script src="js/engine.js?v=3"></script>
 <script src="js/puzzles.js?v=1"></script>
 <script src="js/notation.js?v=1"></script>
-<script src="js/app.js?v=10"></script>
+<script src="js/app.js?v=11"></script>
 </body>
 </html>

@@ -402,7 +402,8 @@
   // ---------- Ván từ thế cờ bất kỳ: tàn cục đại sư, ván/thế cờ nhập vào ----------
   // ghi ván vào bộ nhớ rồi chuyển sang chế độ đấu: restore() sẽ dựng lại và cho máy/người đi tiếp
   // mine: các nước có sẵn là của người chơi (ván nhập vào) hay của người khác (ván đại sư)
-  function playFrom({ fen, moves, side, title, lines, mine }) {
+  // hold: giữ nguyên thế cờ (máy không đi tiếp) cho tới khi người chơi phân tích hoặc đi nước
+  function playFrom({ fen, moves, side, title, lines, mine, hold }) {
     store.set('game', { side, fen: fen || null, title: title || null, moves: moves.map((m, i) => ({ m, by: null, i })), hints: 0 });
     // gán người đi cho từng nước theo bên cầm quân
     const p = fen ? Pos.fromFen(fen) : Pos.start();
@@ -410,6 +411,7 @@
     g.moves.forEach((e) => { e.by = mine && p.side === side ? 'user' : 'ai'; delete e.i; p.make(e.m); });
     store.set('game', g);
     S.pendingCoach = { title: title || 'Ván mới từ thế cờ', cls: null, lines };
+    S.hold = !!hold;
     if (S.mode === 'play') { S.tok++; engine.reset(); if (!restore()) newGame(); }
     else setMode('play');
   }
@@ -498,9 +500,201 @@
     return null;
   }
 
+
+  // ---------- Chơi online (không cần tài khoản) ----------
+  // máy chủ: server/online.js. Máy này giữ một mã bí mật (token) để vào lại ván khi mất kết nối.
+  const OL_TC = ['3+2', '5+3', '10+5', '15+10', '30+0'];
+  const OL_REASON = { mate: 'chiếu bí', stalemate: 'hết nước đi', time: 'hết giờ', resign: 'đầu hàng', agreement: 'hai bên thỏa thuận hòa', repetition: 'lặp lại thế cờ 3 lần', length: 'ván cờ quá dài' };
+  function randToken() {
+    const a = new Uint8Array(18); crypto.getRandomValues(a);
+    return btoa(String.fromCharCode(...a)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+  const OL = { token: store.get('olToken', null), name: store.get('olName', ''), tc: store.get('olTc', '10+5'), room: store.get('olRoom', null), side: 0, st: null, es: null, recvAt: 0, err: '', busy: false, kind: null };
+  if (!OL.token || !/^[A-Za-z0-9_-]{16,64}$/.test(OL.token)) { OL.token = randToken(); store.set('olToken', OL.token); }
+  async function olPost(path, body) {
+    try {
+      const r = await fetch('api/online/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(Object.assign({ token: OL.token }, body)) });
+      const d = await r.json().catch(() => ({}));
+      return Object.assign({ st: r.status }, d);
+    } catch (e) { return { st: 0, error: 'Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.' }; }
+  }
+  function olSetRoom(room) { OL.room = room; if (room) store.set('olRoom', room); else { try { localStorage.removeItem('cotuong.olRoom'); } catch (e) { /* bỏ qua */ } } }
+  async function olStart(kind, code) {
+    if (OL.busy) return;
+    OL.name = $('olName').value.trim().slice(0, 20); store.set('olName', OL.name);
+    OL.tc = $('olTc').value; store.set('olTc', OL.tc);
+    OL.busy = true; OL.err = ''; renderOnline();
+    const body = { name: OL.name, tc: OL.tc };
+    const r = kind === 'quick' ? await olPost('quick', body) : kind === 'new' ? await olPost('new', body) : await olPost('join', Object.assign(body, { room: code }));
+    OL.busy = false;
+    if (r.st !== 200) { OL.err = r.error || 'Có lỗi xảy ra.'; renderOnline(); return; }
+    OL.kind = kind;
+    olSetRoom(r.room); olConnect();
+  }
+  function olClose() { if (OL.es) { OL.es.close(); OL.es = null; } }
+  function olConnect() {
+    olClose();
+    if (!OL.room) return;
+    const es = new EventSource('api/online/events?room=' + encodeURIComponent(OL.room) + '&token=' + encodeURIComponent(OL.token));
+    OL.es = es;
+    es.onmessage = (e) => { if (OL.es === es) olState(JSON.parse(e.data)); };
+    es.onerror = async () => {
+      if (OL.es !== es || OL.unloading) return;
+      OL.offline = true; renderOnline();
+      if (es.readyState !== EventSource.CLOSED) return; // lỗi mạng: trình duyệt tự kết nối lại
+      // kết nối bị đóng hẳn: hỏi máy chủ phòng còn không rồi mới bỏ
+      const room = OL.room, r = await olPost('join', { room, name: OL.name });
+      if (OL.es !== es || OL.room !== room) return;
+      if (r.st === 404) olGone('Phòng ' + room + ' không còn (đã hết hạn hoặc máy chủ vừa khởi động lại).');
+      else setTimeout(() => { if (OL.es === es && OL.room === room) olConnect(); }, 2000);
+    };
+    es.onopen = () => { OL.offline = false; };
+  }
+  function olGone(msg) {
+    olClose(); olSetRoom(null); OL.st = null; OL.side = 0;
+    OL.err = msg || '';
+    S.pos = Pos.start(); S.hist = []; S.arrows = []; S.selected = -1; S.state = 'online-lobby'; S.userSide = RED;
+    S.coach = { title: 'Chơi online', cls: null, lines: ['Chọn "Tìm đối thủ ngẫu nhiên" để chơi ngay với người đang chờ, hoặc tạo phòng rồi gửi mã/link cho bạn bè.', 'Không cần tài khoản. Trong ván không có gợi ý của máy; sau ván có thể nhờ Pikafish phân tích.'] };
+    render();
+  }
+  function olState(st) {
+    if (st.status === 'closed') return olGone('Phòng đã đóng.');
+    const prev = OL.st;
+    OL.st = st; OL.recvAt = Date.now(); OL.offline = false;
+    OL.side = st.you || 0;
+    S.userSide = OL.side || RED;
+    // dựng lại bàn cờ từ danh sách nước
+    if (!prev || prev.moves.length !== st.moves.length || prev.moves.some((m, i) => m !== st.moves[i]) || prev.room !== st.room) {
+      const p = Pos.start(), hist = [];
+      for (const m of st.moves) { const b = p.clone(); hist.push({ m, name: p.moveName(m), by: b.side === OL.side ? 'user' : 'ai', before: b }); p.make(m); }
+      S.pos = p; S.hist = hist; S.selected = -1; S.view = -1;
+    }
+    S.arrows = [];
+    const myTurn = st.status === 'playing' && OL.side && S.pos.side === OL.side;
+    S.state = myTurn ? 'user' : 'online-wait';
+    S.coach = olCoach(st);
+    if (myTurn && document.hidden) document.title = '● Đến lượt bạn · Cờ Tướng';
+    render();
+  }
+  addEventListener('pagehide', () => { OL.unloading = true; });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'Cờ Tướng: luyện cùng máy'; });
+  const sk = (s) => (s === RED ? 'r' : 'b');
+  const olName = (st, side) => st.names[sk(side)] || (st.status === 'waiting' ? 'Đang chờ…' : '?');
+  function olCoach(st) {
+    const me = OL.side, opp = -me || BLACK;
+    if (st.status === 'waiting') {
+      return { title: OL.kind === 'quick' || st.quick ? 'Đang tìm đối thủ…' : 'Phòng ' + st.room + ': đang chờ bạn bè', cls: null, busy: true,
+        lines: st.quick ? ['Ván ' + st.tc + '. Ván bắt đầu ngay khi có người cùng tìm đối thủ với thời gian này.'] : ['Gửi mã phòng ' + st.room + ' hoặc đường link bên dưới cho bạn bè. Ván bắt đầu khi bạn bè vào phòng.', 'Bạn cầm ' + sideName(me) + ' · thời gian ' + st.tc + '.'] };
+    }
+    if (st.status === 'over') {
+      const w = st.result.winner === 'r' ? RED : st.result.winner === 'b' ? BLACK : 0;
+      const why = OL_REASON[st.result.reason] || '';
+      const title = !w ? 'Hòa (' + why + ')' : !me ? sideName(w) + ' thắng (' + why + ')' : w === me ? '🎉 Bạn thắng! (' + why + ')' : 'Bạn thua (' + why + ')';
+      const lines = ['Bấm "Phân tích ván này" để Pikafish chấm từng nước của bạn; các nước sai sẽ vào sổ "Ôn lỗi sai".'];
+      if (st.rematch[sk(opp)] && !st.rematch[sk(me)]) lines.unshift('Đối thủ muốn chơi ván mới.');
+      else if (st.rematch[sk(me)]) lines.unshift('Đang chờ đối thủ đồng ý chơi ván mới…');
+      return { title, cls: !w ? null : w === me ? 'best' : 'mistake', lines };
+    }
+    if (!me) return { title: 'Đang xem: ' + olName(st, RED) + ' – ' + olName(st, BLACK), cls: null, lines: ['Bạn đang xem ván (phòng đã đủ hai người).'] };
+    const lines = [];
+    if (st.drawOffer === sk(opp)) lines.push('Đối thủ đề nghị hòa.');
+    if (st.drawOffer === sk(me)) lines.push('Đã đề nghị hòa, đang chờ đối thủ trả lời.');
+    if (!st.online[sk(opp)]) lines.push('Đối thủ đang mất kết nối. Đồng hồ của họ vẫn chạy.');
+    const last = S.hist[S.hist.length - 1];
+    const title = S.pos.side === me ? (S.pos.inCheck(me) ? 'Bạn đang bị chiếu!' : 'Đến lượt bạn') : 'Đối thủ đang nghĩ…';
+    if (last) lines.unshift('Nước vừa đi: ' + (last.by === 'user' ? 'Bạn' : olName(st, -me)) + ' · ' + last.name);
+    return { title, cls: null, lines };
+  }
+  async function olMove(m) {
+    const st = OL.st; if (!st) return;
+    const ply = S.hist.length;
+    // hiện ngay trên bàn cờ, máy chủ xác nhận sau
+    const before = S.pos.clone(), name = S.pos.moveName(m);
+    S.pos.make(m); S.hist.push({ m, name, by: 'user', before });
+    S.selected = -1; S.state = 'online-wait';
+    S.coach = { title: 'Đối thủ đang nghĩ…', cls: null, lines: ['Bạn đi: ' + name] };
+    render();
+    const r = await olPost('act', { room: st.room, act: 'move', move: m, ply });
+    if (r.st !== 200) { OL.err = r.error || ''; if (r.state) { OL.st = null; olState(r.state); } else if (OL.st) { const s2 = OL.st; OL.st = null; olState(s2); } renderOnline(); }
+  }
+  async function olAct(act) {
+    if (!OL.room) return;
+    if (act === 'resign' && !confirm('Đầu hàng ván này?')) return;
+    if (act === 'leave') {
+      if (OL.st && OL.st.status === 'playing' && OL.side && !confirm('Rời phòng khi đang chơi sẽ bị xử thua. Rời phòng?')) return;
+      await olPost('act', { room: OL.room, act: 'leave' });
+      return olGone('');
+    }
+    const r = await olPost('act', { room: OL.room, act });
+    if (r.st !== 200) { OL.err = r.error || ''; renderOnline(); }
+  }
+  function olAnalyze() {
+    const st = OL.st; if (!st) return;
+    olClose();
+    playFrom({ moves: st.moves, side: OL.side || RED, title: 'Ván online ' + olName(st, RED) + ' – ' + olName(st, BLACK), mine: true, hold: true,
+      lines: ['Đã chép ván online (' + st.moves.length + ' nửa nước) sang "Đấu với máy".', 'Bấm "Phân tích ván" để Pikafish chấm từng nước của bạn.'] });
+  }
+  const fmtClock = (ms) => { const t = Math.max(0, Math.ceil(ms / 1000)); return Math.floor(t / 60) + ':' + String(t % 60).padStart(2, '0'); };
+  function olClock(side) {
+    const st = OL.st; if (!st) return 0;
+    const k = sk(side), v = st.clock[k];
+    return st.running === k ? v - (Date.now() - OL.recvAt) : v;
+  }
+  function olPlayerRow(side, isMe) {
+    const st = OL.st, k = sk(side), ms = olClock(side), on = st.online[k];
+    const running = st.running === k;
+    return `<div class="ol-player${running ? ' run' : ''}${ms < 20000 && st.status === 'playing' ? ' low' : ''}">` +
+      `<span class="ol-dot ${side === RED ? 'r' : 'b'}"></span><span class="ol-name">${esc(olName(st, side))}${isMe ? ' (bạn)' : ''}${st.names[k] && !on ? ' <i class="muted small">mất kết nối</i>' : ''}</span>` +
+      `<span class="ol-clock" data-clock="${side}">${fmtClock(ms)}</span></div>`;
+  }
+  function renderOnline() {
+    if (S.mode !== 'online') return;
+    const st = OL.st, inRoom = !!OL.room;
+    $('olLobby').hidden = inRoom; $('olGame').hidden = !inRoom;
+    $('olErr').textContent = OL.err || '';
+    $('olErr2').textContent = (OL.offline ? 'Mất kết nối, đang kết nối lại… ' : '') + (inRoom ? OL.err || '' : '');
+    for (const b of document.querySelectorAll('#olLobby button')) b.disabled = OL.busy;
+    if (!inRoom) { if ($('olName').value === '' && OL.name) $('olName').value = OL.name; $('olTc').value = OL.tc; $('olInfo').textContent = ''; return; }
+    if (!st) { $('olPlayers').innerHTML = '<div class="muted small">Đang vào phòng ' + esc(OL.room) + '…</div>'; $('olActions').innerHTML = ''; $('olShare').innerHTML = ''; return; }
+    $('olInfo').textContent = 'Phòng ' + st.room + ' · ' + st.tc + (st.watchers ? ' · ' + st.watchers + ' người xem' : '');
+    const bottom = OL.side || RED;
+    $('olPlayers').innerHTML = olPlayerRow(-bottom, false) + olPlayerRow(bottom, !!OL.side);
+    const link = location.origin + location.pathname + '?p=' + st.room;
+    $('olShare').innerHTML = st.status === 'waiting' && !st.quick
+      ? `<div class="ol-code">Mã phòng <b>${esc(st.room)}</b></div><div class="ol-link"><input class="full" readonly value="${esc(link)}"><button class="btn" data-act="ol-copy">Chép link</button></div>` : '';
+    const b = [], me = OL.side, opp = -me;
+    if (st.status === 'playing' && me) {
+      if (st.drawOffer === sk(opp)) b.push('<button class="btn primary" data-act="ol-accept">Đồng ý hòa</button><button class="btn" data-act="ol-decline">Từ chối</button>');
+      else b.push('<button class="btn" data-act="ol-draw"' + (st.drawOffer === sk(me) ? ' disabled' : '') + '>½ Xin hòa</button>');
+      b.push('<button class="btn" data-act="ol-resign">⚑ Đầu hàng</button>');
+    }
+    if (st.status === 'over') {
+      if (me) b.push('<button class="btn primary" data-act="ol-rematch"' + (st.rematch[sk(me)] ? ' disabled' : '') + '>' + (st.rematch[sk(opp)] ? 'Đồng ý ván mới' : 'Ván mới (đổi bên)') + '</button>');
+      b.push('<button class="btn" data-act="ol-analyze">Phân tích ván này</button>');
+    }
+    b.push('<button class="btn" data-act="ol-leave">' + (st.status === 'waiting' ? 'Hủy' : 'Rời phòng') + '</button>');
+    const html = b.join('');
+    if ($('olActions').dataset.sig !== html) { $('olActions').innerHTML = html; $('olActions').dataset.sig = html; }
+  }
+  // đồng hồ chạy
+  setInterval(() => {
+    if (S.mode !== 'online' || !OL.st || OL.st.status !== 'playing') return;
+    for (const el of document.querySelectorAll('[data-clock]')) {
+      const ms = olClock(+el.dataset.clock); el.textContent = fmtClock(ms);
+      el.parentElement.classList.toggle('low', ms < 20000);
+    }
+  }, 250);
+  function olEnter() {
+    S.pos = Pos.start(); S.hist = []; S.arrows = []; S.selected = -1; S.view = -1;
+    S.state = 'online-lobby';
+    if (OL.pendingJoin) { const c = OL.pendingJoin; OL.pendingJoin = null; olGone(''); olStart('join', c); return; }
+    if (OL.room) { S.coach = { title: 'Đang vào lại phòng ' + OL.room + '…', cls: null, lines: [], busy: true }; OL.st = null; render(); olConnect(); }
+    else olGone('');
+  }
+
   // ---------- Luồng ván cờ ----------
   function save() {
-    if (S.mode === 'puzzle') return;
+    if (S.mode !== 'play') return;
     store.set('game', { side: S.userSide, fen: S.startFen, title: S.gameTitle, moves: S.hist.map((h) => ({ m: h.m, by: h.by, cls: h.cls, coach: h.coach })), hints: S.hintsUsed });
   }
   function newGame(keepSide) {
@@ -529,7 +723,8 @@
       S.coach = S.pendingCoach || { title: 'Tiếp tục ván cũ', cls: null, lines: ['Ván cờ trước đã được khôi phục.' + (S.gameTitle ? ' (' + S.gameTitle + ')' : '')] };
       S.pendingCoach = null;
       render();
-      if (!checkOver()) { if (S.pos.side === S.userSide) startUserTurn(); else aiTurn(); }
+      if (S.hold && S.pos.side !== S.userSide && S.pos.legalMoves().length) { S.hold = false; S.state = 'user'; S.result = null; render(); }
+      else if (!checkOver()) { S.hold = false; if (S.pos.side === S.userSide) startUserTurn(); else aiTurn(); }
       return true;
     } catch (e) { S.startFen = null; S.gameTitle = null; return false; }
   }
@@ -963,6 +1158,14 @@
 
   function renderStatus() {
     let t;
+    document.querySelectorAll('[data-mode]').forEach((b) => b.classList.toggle('on', b.dataset.mode === S.mode));
+    if (S.mode === 'online') {
+      const st = OL.st;
+      t = S.view >= 0 ? 'Đang xem lại nước ' + (S.view + 1) : !OL.room ? 'Chơi online' : !st ? 'Đang kết nối…' : S.coach ? S.coach.title : '';
+      $('status').textContent = t;
+      $('status').className = 'status' + (st && st.status === 'playing' && S.state === 'user' && S.pos.inCheck(S.pos.side) ? ' alert' : '');
+      return;
+    }
     $('undoBtn').innerHTML = S.mode === 'puzzle' ? '↺ Làm lại bài' : S.mode === 'games' ? '◀ Lùi <kbd>←</kbd>' : '↶ Đi lại <kbd>U</kbd>';
     $('hintBtn').innerHTML = S.mode === 'games' ? 'Tiến ▶ <kbd>→</kbd>' : '<span>💡</span> Gợi ý <kbd>H</kbd>';
     if (S.mode === 'games') {
@@ -990,6 +1193,7 @@
     else if (S.state === 'ai' && !S.drill) t = S.coach && S.coach.busy ? 'Thầy đang chấm nước của bạn…' : 'Máy đang nghĩ…';
     else if (S.state === 'confirm') t = 'Bạn có chắc muốn đi nước này?';
     else if (S.drill && S.state === 'ai') t = 'Máy đi theo đại sư…';
+    else if (S.state === 'user' && S.pos.side !== S.userSide) t = 'Bấm "Phân tích ván" để thầy chấm các nước của bạn';
     else if (S.drill) t = 'Luyện khai cuộc: nước ' + (Math.floor(S.hist.length / 2) + 1) + ', đến lượt bạn';
     else t = S.pos.inCheck(S.pos.side) ? 'Bạn đang bị chiếu!' : 'Đến lượt bạn (' + sideName(S.userSide) + ')';
     $('status').textContent = t;
@@ -999,6 +1203,7 @@
   }
 
   function render() {
+    renderOnline();
     renderPieces(); renderOverlay(); renderCoach(); renderMoves(); renderStatus(); if (S.mode === 'play') renderEval(); renderPuzzle(); renderPro(); renderGames();
     $('level').value = S.level; $('side').value = S.userSide;
     $('engInfo').textContent = REMOTE.used === true ? 'Máy chấm: Pikafish trên máy chủ (mạnh, cần mạng).' : REMOTE.used === false ? 'Máy chấm: engine trong trình duyệt (không kết nối được máy chủ Pikafish).' : '';
@@ -1157,11 +1362,13 @@
   }
   function setMode(mode) {
     if (S.mode === mode) return;
+    if (S.mode === 'online') olClose(); // ván online vẫn tiếp tục trên máy chủ; quay lại tab sẽ vào lại
     S.tok++; engine.reset();
     S.mode = mode; document.body.dataset.mode = mode; store.set('mode', mode);
     S.view = -1; S.arrows = []; S.selected = -1; S.result = null;
     if (mode === 'puzzle') { S.userSide = RED; openCollection(store.get('pzCol', 'thuc-chien'), store.get('pzIdx', 0)); }
     else if (mode === 'games') gmEnter();
+    else if (mode === 'online') olEnter();
     else { S.userSide = store.get('side', RED); if (!restore()) newGame(); }
   }
   function loadPuzzle(i) {
@@ -1523,7 +1730,7 @@
     const p = S.pos.b[sq];
     if (S.selected >= 0) {
       const m = S.selected | (sq << 7);
-      if (S.pos.isLegal(m)) { if (S.mode === 'puzzle') onPuzzleMove(m); else if (S.mode === 'games') onGuessMove(m); else if (S.drill) onDrillMove(m); else onUserMove(m); return; }
+      if (S.pos.isLegal(m)) { if (S.mode === 'puzzle') onPuzzleMove(m); else if (S.mode === 'games') onGuessMove(m); else if (S.mode === 'online') olMove(m); else if (S.drill) onDrillMove(m); else onUserMove(m); return; }
     }
     if (p && sgn(p) === S.userSide) S.selected = sq === S.selected ? -1 : sq;
     else S.selected = -1;
@@ -1533,6 +1740,7 @@
     const t = e.target.closest('[data-act],[data-view],[data-pz],[data-mode],[data-pro],[data-gm],[data-theme]');
     if (!t) return;
     if (t.dataset.theme != null) { practiceTheme(t.dataset.theme); return; }
+    if (t.dataset.view != null && S.mode === 'online') { const i = +t.dataset.view; S.view = S.view === i ? -1 : i; render(); return; }
     if (t.dataset.view != null && S.mode === 'games') { if (S.state !== 'ai') { GM.guess = false; S.userSide = RED; gmGoto(+t.dataset.view + 1); } return; }
     if (t.dataset.gm != null) { gmLoad(+t.dataset.gm); return; }
     if (t.dataset.view != null) {
@@ -1553,6 +1761,12 @@
     else if (a === 'gm-next') { S.coach.gmNext = false; gmGoto(GM.ply + 1); }
     else if (a === 'gm-first') gmGoto(0);
     else if (a === 'gm-play') gmPlay();
+    else if (a === 'ol-quick') olStart('quick');
+    else if (a === 'ol-new') olStart('new');
+    else if (a === 'ol-join') { const c = $('olCode').value.trim().toUpperCase(); if (c) olStart('join', c); }
+    else if (a === 'ol-analyze') olAnalyze();
+    else if (a === 'ol-copy') { const inp = document.querySelector('.ol-link input'); navigator.clipboard.writeText(inp.value).then(() => { t.textContent = 'Đã chép'; }, () => { inp.select(); }); }
+    else if (a && a.startsWith('ol-')) olAct(a.slice(3));
     else if (a === 'gm-key') { GM.keyOnly = !GM.keyOnly; store.set('gmKey', GM.keyOnly); if (GM.guess && S.state !== 'ai') gmGoto(GM.ply); else render(); }
     else if (a === 'analyze') analyzeGame();
     else if (a === 'gm-last') { GM.guess = false; S.userSide = RED; gmGoto(GM.moves.length); }
@@ -1565,8 +1779,9 @@
     else if (a === 'keep-blunder') confirmBlunder(false);
     else if (a === 'exit-view') { S.view = -1; render(); }
   });
-  $('hintBtn').onclick = () => (S.mode === 'puzzle' ? puzzleHint() : S.mode === 'play' && S.drill ? S.state === 'user' && drillHint() : S.mode === 'games' ? (S.state === 'reveal' ? (S.coach.gmNext = false, gmGoto(GM.ply + 1)) : gmGoto(GM.ply + 1)) : showHint());
-  $('undoBtn').onclick = () => (S.mode === 'puzzle' ? loadPuzzle(PZ.idx) : S.mode === 'games' ? gmGoto(GM.guess ? Math.max(0, GM.ply - 2) : GM.ply - 1) : undo());
+  $('olCode').onkeydown = (e) => { if (e.key === 'Enter') { const c = e.target.value.trim().toUpperCase(); if (c) olStart('join', c); } };
+  $('hintBtn').onclick = () => S.mode === 'online' ? null : (S.mode === 'puzzle' ? puzzleHint() : S.mode === 'play' && S.drill ? S.state === 'user' && drillHint() : S.mode === 'games' ? (S.state === 'reveal' ? (S.coach.gmNext = false, gmGoto(GM.ply + 1)) : gmGoto(GM.ply + 1)) : showHint());
+  $('undoBtn').onclick = () => S.mode === 'online' ? null : (S.mode === 'puzzle' ? loadPuzzle(PZ.idx) : S.mode === 'games' ? gmGoto(GM.guess ? Math.max(0, GM.ply - 2) : GM.ply - 1) : undo());
   $('pzCol').onchange = (e) => openCollection(e.target.value, 0);
   $('impBtn').onclick = () => {
     if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi để nhập ván mới?')) return;
@@ -1598,7 +1813,8 @@
   };
   ['optWarn', 'optThreats', 'optHan'].forEach((id) => ($(id).onchange = optChange));
   document.addEventListener('keydown', (e) => {
-    if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
+    if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (S.mode === 'online' && e.key !== 'Escape') return; // không gợi ý/đi lại khi chơi online
     if (S.mode === 'games' && (e.key === 'ArrowRight' || e.key === 'ArrowLeft')) { e.preventDefault(); $(e.key === 'ArrowRight' ? 'hintBtn' : 'undoBtn').click(); return; }
     if (e.key === 'h' || e.key === 'H') $('hintBtn').click();
     else if (e.key === 'u' || e.key === 'U' || (e.key === 'z' && (e.metaKey || e.ctrlKey))) $('undoBtn').click();
@@ -1607,7 +1823,10 @@
 
   // ---------- Khởi động ----------
   drawGrid();
-  const m0 = store.get('mode', 'play');
+  // link mời: ?p=MÃPHÒNG
+  const invite = new URLSearchParams(location.search).get('p');
+  if (invite && /^[A-Za-z0-9]{4,8}$/.test(invite)) { OL.pendingJoin = invite.toUpperCase(); history.replaceState(null, '', location.pathname); }
+  const m0 = OL.pendingJoin ? 'online' : store.get('mode', 'play');
   S.mode = 'none';
-  setMode(['play', 'puzzle', 'games'].includes(m0) ? m0 : 'play');
+  setMode(['play', 'puzzle', 'games', 'online'].includes(m0) ? m0 : 'play');
 })();

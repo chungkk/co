@@ -37,6 +37,7 @@ class HomePage extends StatelessWidget {
                           Mode.play => 'Luyện cùng máy, có thầy chỉ nước',
                           Mode.puzzle => 'Bài tập sát cục',
                           Mode.games => 'Ván đại sư',
+                          Mode.online => 'Chơi online với người khác',
                         },
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -85,6 +86,7 @@ class HomePage extends StatelessWidget {
     (Icons.sports_esports_outlined, Icons.sports_esports, 'Đấu với máy'),
     (Icons.extension_outlined, Icons.extension, 'Sát cục'),
     (Icons.menu_book_outlined, Icons.menu_book, 'Ván đại sư'),
+    (Icons.public_outlined, Icons.public, 'Online'),
   ];
 
   Widget _bottomNav() => NavigationBar(
@@ -213,9 +215,9 @@ class HomePage extends StatelessWidget {
   List<Widget> _controls() => [
     StatusLine(g: g),
     const SizedBox(height: 8),
-    ActionButtons(g: g),
-    const SizedBox(height: 12),
+    if (g.mode != Mode.online) ...[ActionButtons(g: g), const SizedBox(height: 12)], // không gợi ý khi chơi online
     CoachCard(g: g),
+    if (g.mode == Mode.online) ...[const SizedBox(height: 12), OnlineCard(g: g)],
   ];
 
   List<Widget> _details() => [
@@ -475,7 +477,7 @@ class ActionButtons extends StatelessWidget {
     final (sLabel, sIcon) = switch (g.mode) {
       Mode.puzzle => ('Làm lại bài', Icons.replay),
       Mode.games => ('Lùi', Icons.chevron_left),
-      Mode.play => ('Đi lại', Icons.undo),
+      Mode.play || Mode.online => ('Đi lại', Icons.undo),
     };
     final primary = AppButton(
       label: pLabel,

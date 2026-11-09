@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -6,6 +8,7 @@ import '../engine/engine.dart';
 import '../game/analysis.dart';
 import '../game/constants.dart';
 import '../game/controller.dart';
+import '../game/online.dart';
 import 'home.dart';
 import 'theme.dart';
 
@@ -1038,6 +1041,265 @@ class _ImportCardState extends State<ImportCard> {
               padding: const EdgeInsets.only(top: 6),
               child: Text(_msg, style: TextStyle(fontSize: 12.5, color: pal.forCls('mistake'))),
             ),
+        ],
+      ),
+    );
+  }
+}
+
+// ---------- Chơi online ----------
+class OnlineCard extends StatefulWidget {
+  final GameController g;
+  const OnlineCard({super.key, required this.g});
+  @override
+  State<OnlineCard> createState() => _OnlineCardState();
+}
+
+class _OnlineCardState extends State<OnlineCard> {
+  late final _name = TextEditingController(text: widget.g.olName);
+  final _code = TextEditingController();
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    // đồng hồ chạy
+    _tick = Timer.periodic(const Duration(milliseconds: 250), (_) {
+      if (widget.g.online.st?['status'] == 'playing' && mounted) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    _name.dispose();
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _start(String kind) async {
+    final g = widget.g;
+    g.olName = _name.text.trim();
+    if (kind == 'join' && _code.text.trim().isEmpty) return;
+    await g.olStart(kind, code: kind == 'join' ? _code.text : null);
+  }
+
+  Future<bool> _confirm(String text, String ok) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          content: Text(text),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Thôi')),
+            TextButton(onPressed: () => Navigator.pop(c, true), child: Text(ok)),
+          ],
+        ),
+      ) ==
+      true;
+
+  @override
+  Widget build(BuildContext context) {
+    final g = widget.g, o = g.online, st = o.st, pal = context.pal;
+    if (o.room == null) return _lobby(context);
+    String k(int s) => s == RED ? 'r' : 'b';
+    final children = <Widget>[];
+    if (st == null) {
+      children.add(Text('Đang vào phòng ${o.room}…', style: _small(context)));
+    } else {
+      final bottom = g.olSide != 0 ? g.olSide : RED;
+      for (final side in [-bottom, bottom]) {
+        final ms = o.clock(k(side)), running = st['running'] == k(side), named = st['names'][k(side)] != null;
+        final low = st['status'] == 'playing' && ms < 20000;
+        children.add(
+          Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: pal.surface2,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: running ? pal.accent : pal.line, width: running ? 1.5 : 1),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 12,
+                  height: 12,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: side == RED ? kRed : const Color(0xFF2B2420),
+                    border: Border.all(color: pal.muted, width: side == RED ? 0 : 1),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text.rich(
+                    TextSpan(
+                      children: [
+                        TextSpan(text: g.olNameOf(st, side), style: const TextStyle(fontWeight: FontWeight.w600)),
+                        if (g.olSide != 0 && side == g.olSide) const TextSpan(text: ' (bạn)'),
+                        if (named && st['online'][k(side)] != true)
+                          TextSpan(text: '  mất kết nối', style: TextStyle(fontSize: 12, color: pal.muted)),
+                      ],
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: low ? pal.cBlunder : (running ? pal.accent : null),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Text(
+                    fmtClock(ms),
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      fontFeatures: const [FontFeature.tabularFigures()],
+                      color: low || running ? Colors.white : pal.ink,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      if (st['status'] == 'waiting' && st['quick'] != true) {
+        children.add(
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6),
+            child: Row(
+              children: [
+                const Text('Mã phòng ', style: TextStyle(fontSize: 14)),
+                SelectableText(st['room'] as String, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, letterSpacing: 2)),
+                const Spacer(),
+                AppButton(
+                  label: 'Chép link',
+                  compact: true,
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: 'https://co.halle.biz/?p=${st['room']}'));
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Đã chép link mời')));
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      final me = g.olSide, opp = -me, b = <Widget>[];
+      if (st['status'] == 'playing' && me != 0) {
+        if (st['drawOffer'] == k(opp)) {
+          b.add(AppButton(label: 'Đồng ý hòa', primary: true, compact: true, onPressed: () => g.olAct('accept')));
+          b.add(AppButton(label: 'Từ chối', compact: true, onPressed: () => g.olAct('decline')));
+        } else {
+          b.add(AppButton(label: '½ Xin hòa', compact: true, onPressed: st['drawOffer'] == k(me) ? null : () => g.olAct('draw')));
+        }
+        b.add(
+          AppButton(
+            label: 'Đầu hàng',
+            icon: Icons.flag_outlined,
+            compact: true,
+            onPressed: () async {
+              if (await _confirm('Đầu hàng ván này?', 'Đầu hàng')) g.olAct('resign');
+            },
+          ),
+        );
+      }
+      if (st['status'] == 'over') {
+        final rm = st['rematch'] as Map<String, dynamic>;
+        if (me != 0) {
+          b.add(
+            AppButton(
+              label: rm[k(opp)] == true ? 'Đồng ý ván mới' : 'Ván mới (đổi bên)',
+              primary: true,
+              compact: true,
+              onPressed: rm[k(me)] == true ? null : () => g.olAct('rematch'),
+            ),
+          );
+        }
+        b.add(AppButton(label: 'Phân tích ván này', compact: true, onPressed: g.olAnalyze));
+      }
+      b.add(
+        AppButton(
+          label: st['status'] == 'waiting' ? 'Hủy' : 'Rời phòng',
+          compact: true,
+          onPressed: () async {
+            if (st['status'] == 'playing' && me != 0 && !await _confirm('Rời phòng khi đang chơi sẽ bị xử thua. Rời phòng?', 'Rời phòng')) return;
+            g.olLeave();
+          },
+        ),
+      );
+      children.add(Padding(padding: const EdgeInsets.only(top: 4), child: Wrap(spacing: 6, runSpacing: 6, children: b)));
+    }
+    final note = '${o.offline ? 'Mất kết nối, đang kết nối lại… ' : ''}${o.err}';
+    if (note.trim().isNotEmpty) {
+      children.add(Padding(padding: const EdgeInsets.only(top: 6), child: Text(note, style: TextStyle(fontSize: 12.5, color: pal.forCls('mistake')))));
+    }
+    return AppCard(
+      title: 'Chơi online',
+      trailing: st == null
+          ? null
+          : Text('Phòng ${st['room']} · ${st['tc']}${(st['watchers'] as int? ?? 0) > 0 ? ' · ${st['watchers']} người xem' : ''}', style: _small(context)),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children),
+    );
+  }
+
+  Widget _lobby(BuildContext context) {
+    final g = widget.g, o = g.online, pal = context.pal;
+    InputDecoration deco(String hint) => InputDecoration(
+      hintText: hint,
+      isDense: true,
+      filled: true,
+      fillColor: pal.surface2,
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: pal.line)),
+    );
+    return AppCard(
+      title: 'Chơi online',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          TextField(controller: _name, maxLength: 20, decoration: deco('Tên của bạn (để trống: tự đặt "Khách…")').copyWith(counterText: '')),
+          const SizedBox(height: 8),
+          _SelectField(
+            text: 'Thời gian: ${onlineTcLabels[g.olTc]}',
+            onTap: () => showPickerSheet<String>(
+              context,
+              title: 'Thời gian (phút + giây cộng mỗi nước)',
+              items: [for (final t in onlineTcs) (t, onlineTcLabels[t]!, '')],
+              selected: g.olTc,
+              onPick: (t) => setState(() => g.olTc = t),
+            ),
+          ),
+          const SizedBox(height: 10),
+          AppButton(label: 'Tìm đối thủ ngẫu nhiên', icon: Icons.bolt, primary: true, onPressed: o.busy ? null : () => _start('quick')),
+          const SizedBox(height: 8),
+          AppButton(label: 'Tạo phòng, mời bạn bè', icon: Icons.group_add_outlined, onPressed: o.busy ? null : () => _start('new')),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _code,
+                  maxLength: 8,
+                  textCapitalization: TextCapitalization.characters,
+                  autocorrect: false,
+                  decoration: deco('Nhập mã phòng').copyWith(counterText: ''),
+                  onSubmitted: (_) => _start('join'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              AppButton(label: 'Vào', compact: true, onPressed: o.busy ? null : () => _start('join')),
+            ],
+          ),
+          if (o.err.isNotEmpty)
+            Padding(padding: const EdgeInsets.only(top: 6), child: Text(o.err, style: TextStyle(fontSize: 12.5, color: pal.forCls('mistake')))),
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text('Không cần tài khoản. Chơi được với người dùng trang co.halle.biz.', style: _small(context)),
+          ),
         ],
       ),
     );
