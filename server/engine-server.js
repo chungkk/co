@@ -142,8 +142,10 @@ const server = http.createServer((req, res) => {
     res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST, GET', 'Access-Control-Allow-Headers': 'Content-Type', 'Access-Control-Max-Age': '86400' });
     return res.end();
   }
-  // sau proxy (Coolify/Traefik → nginx): địa chỉ thật là phần đầu của X-Forwarded-For
-  const ip = String(req.headers['x-forwarded-for'] || req.socket.remoteAddress).split(',')[0].trim();
+  // sau proxy (Coolify/Traefik → nginx): nginx tính IP thật (module realip) và gửi qua X-Real-IP.
+  // Không dùng phần đầu X-Forwarded-For vì client tự ghi được, lách giới hạn theo IP.
+  // Máy chủ chỉ nghe 127.0.0.1 nên chỉ nginx gửi tới được.
+  const ip = String(req.headers['x-real-ip'] || req.socket.remoteAddress).trim();
   if (online.handle(req, res, ip, send)) return;
   if (req.url === '/api/health') return send(res, 200, { ok: pool.some((e) => e.ready), engines: pool.length, queue: queue.length, cache: cache.size });
   if (req.url !== '/api/analyse' || req.method !== 'POST') return send(res, 404, { error: 'not found' });

@@ -352,7 +352,7 @@
   function startDrill(k) {
     if (!PRO.pos) return;
     const op = DRILL_OPS[k] || DRILL_OPS[0];
-    S.tok++; engine.reset(); S.startFen = null; S.gameTitle = null;
+    S.tok++; engine.reset(); S.startFen = null; S.gameTitle = null; S.userSide = store.get('side', RED);
     S.pos = Pos.start(); S.hist = []; S.selected = -1; S.arrows = []; S.view = -1; S.result = null;
     S.hintsUsed = 0; S.lastScore = 0;
     for (const nm of op.seq) {
@@ -638,7 +638,8 @@
       const why = OL_REASON[st.result.reason] || '';
       const title = !w ? 'Hòa (' + why + ')' : !me ? sideName(w) + ' thắng (' + why + ')' : w === me ? '🎉 Bạn thắng! (' + why + ')' : 'Bạn thua (' + why + ')';
       const lines = ['Bấm "Phân tích ván này" để Pikafish chấm từng nước của bạn; các nước sai sẽ vào sổ "Ôn lỗi sai".'];
-      if (st.rematch[sk(opp)] && !st.rematch[sk(me)]) lines.unshift('Đối thủ muốn chơi ván mới.');
+      if (!me) { /* người xem: không có lời mời ván mới của riêng mình */ }
+      else if (st.rematch[sk(opp)] && !st.rematch[sk(me)]) lines.unshift('Đối thủ muốn chơi ván mới.');
       else if (st.rematch[sk(me)]) lines.unshift('Đang chờ đối thủ đồng ý chơi ván mới…');
       return { title, cls: !w ? null : w === me ? 'best' : 'mistake', lines };
     }
@@ -731,10 +732,18 @@
       el.parentElement.classList.toggle('low', ms < 20000);
     }
   }, 250);
-  function olEnter() {
+  async function olEnter() {
     S.pos = Pos.start(); S.hist = []; S.arrows = []; S.selected = -1; S.view = -1;
     S.state = 'online-lobby';
-    if (OL.pendingJoin) { const c = OL.pendingJoin; OL.pendingJoin = null; olGone(''); olStart('join', c); return; }
+    if (OL.pendingJoin) {
+      let c = OL.pendingJoin; OL.pendingJoin = null;
+      // đang ở phòng khác: hỏi trước, đồng ý thì rời phòng cũ (đang chơi sẽ bị xử thua như nút "Rời phòng")
+      if (OL.room && OL.room !== c) {
+        if (!confirm('Bạn đang ở phòng ' + OL.room + '. Rời phòng đó để vào phòng ' + c + '? Nếu ván cũ đang diễn ra, bạn sẽ bị xử thua.')) c = null;
+        else { await olPost('act', { room: OL.room, act: 'leave' }); if (S.mode !== 'online') { olSetRoom(null); return; } }
+      }
+      if (c) { olGone(''); olStart('join', c); return; }
+    }
     if (OL.room) { S.coach = { title: 'Đang vào lại phòng ' + OL.room + '…', cls: null, lines: [], busy: true }; OL.st = null; render(); olConnect(); }
     else olGone('');
   }
@@ -771,7 +780,7 @@
       S.coach = S.pendingCoach || { title: 'Tiếp tục ván cũ', cls: null, lines: ['Ván cờ trước đã được khôi phục.' + (S.gameTitle ? ' (' + S.gameTitle + ')' : '')] };
       S.pendingCoach = null;
       render();
-      if (hold && S.pos.side !== S.userSide && S.pos.legalMoves().length) { S.state = 'user'; S.result = null; render(); }
+      if (hold && S.pos.side !== S.userSide && S.pos.legalMoves().length) { S.state = 'user'; S.result = null; S.pre = null; render(); }
       else if (!checkOver()) { if (S.pos.side === S.userSide) startUserTurn(); else aiTurn(); }
       return true;
     } catch (e) { S.startFen = null; S.gameTitle = null; return false; }
@@ -960,7 +969,8 @@
   }
 
   async function showHint() {
-    if (S.state !== 'user' || S.view >= 0) return;
+    // giữ thế cờ (chưa tới lượt mình, chưa có phân tích sẵn) thì không gợi ý
+    if (S.state !== 'user' || S.view >= 0 || !S.pre || S.pos.side !== S.userSide) return;
     const tok = S.tok, pos = S.pos.clone();
     S.hintsUsed++;
     S.coach = { title: 'Đang phân tích…', cls: null, lines: [], busy: true }; render();
@@ -1247,14 +1257,15 @@
     else t = S.pos.inCheck(S.pos.side) ? 'Bạn đang bị chiếu!' : 'Đến lượt bạn (' + sideName(S.userSide) + ')';
     $('status').textContent = t;
     $('status').className = 'status' + (S.state === 'ai' ? ' thinking' : '') + (S.state === 'user' && S.pos.inCheck(S.pos.side) ? ' alert' : '');
-    $('hintBtn').disabled = !(S.state === 'user' && S.view < 0);
+    $('hintBtn').disabled = !(S.state === 'user' && S.view < 0 && S.pos.side === S.userSide);
     $('undoBtn').disabled = !S.hist.some((h) => h.by === 'user') || S.state === 'ai';
   }
 
   function render() {
     renderOnline();
     renderPieces(); renderOverlay(); renderCoach(); renderMoves(); renderStatus(); if (S.mode === 'play') renderEval(); renderPuzzle(); renderPro(); renderGames();
-    $('level').value = S.level; $('side').value = S.userSide;
+    // "Cầm quân" là bên cho ván mới; ván nhập/đánh tiếp/online có thể đang cầm bên khác
+    $('level').value = S.level; $('side').value = store.get('side', RED);
     $('engInfo').textContent = REMOTE.used === true ? 'Máy chấm: Pikafish trên máy chủ (mạnh, cần mạng).' : REMOTE.used === false ? 'Máy chấm: engine trong trình duyệt (không kết nối được máy chủ Pikafish).' : '';
     $('optWarn').checked = S.opt.warn; $('optThreats').checked = S.opt.threats; $('optHan').checked = S.opt.han; $('optSound').checked = S.opt.sound;
   }
@@ -1399,12 +1410,15 @@
   const isSolved = (i) => (PZ.col.review ? PZ.col.items[i].rv.due > Date.now() : PZ.solved.has(pzKey(i)) || PZ.solvedFen.has(PZ.col.items[i].fen));
 
   async function openCollection(id, idx) {
+    const req = (PZ.req = (PZ.req || 0) + 1);
     if (id === REV_ID) { PZ.col = reviewCollection(); store.set('pzCol', REV_ID); return loadPuzzle(PZ.col.items.length ? 0 : idx || 0); }
     let col = PZ.cache[id];
     if (!col) {
       try { col = await (await fetch('data/puzzles/' + id + '.json?v=2')).json(); PZ.cache[id] = col; }
       catch (e) { col = BUILTIN; }
     }
+    // trong lúc tải đã sang tab khác hoặc chọn bộ khác
+    if (req !== PZ.req || S.mode !== 'puzzle') return;
     PZ.col = col; store.set('pzCol', col.id);
     const n0 = PZ.solvedFen.size;
     col.items.forEach((p, i) => { if (PZ.solved.has(pzKey(i))) PZ.solvedFen.add(p.fen); });
@@ -1610,6 +1624,15 @@
   // chỉ hỏi ở thời điểm then chốt: nước tốt nhất hơn nước nhì ít nhất KEY_GAP (≈1 Tốt)
   GM.keyOnly = store.get('gmKey', true);
   const KEY_GAP = 100;
+  function gmResetStat() { GM.stat = { ok: 0, near: 0, tot: 0, skip: 0 }; GM.skipped = new Set(); }
+  gmResetStat();
+  // nước thứ k là của bên nào
+  const gmSideAt = (k) => (k % 2 ? -GM.start.side : GM.start.side);
+  // lần hỏi gần nhất trước nước hiện tại (bỏ qua các nước thường đã tự đi khi chỉ hỏi nước then chốt)
+  function gmPrevAsk() {
+    for (let k = GM.ply - 1; k >= 0; k--) if (gmSideAt(k) === GM.gside && (!GM.keyOnly || GM.key[k] === true)) return k;
+    return 0;
+  }
   const decodeM = (s) => ((+s[1]) * 9 + (+s[0])) | (((+s[3]) * 9 + (+s[2])) << 7);
   async function gmEnter() {
     S.state = 'gview'; S.hist = []; S.arrows = [];
@@ -1622,8 +1645,11 @@
   }
   async function gmOpenCol(id, gi) {
     if (!id) return;
+    const req = (GM.req = (GM.req || 0) + 1);
     let col = GM.cache[id];
     if (!col) { try { col = await (await fetch('data/games/' + id + '.json?v=1')).json(); GM.cache[id] = col; } catch (e) { return; } }
+    // trong lúc tải đã sang tab khác hoặc chọn bộ khác
+    if (req !== GM.req || S.mode !== 'games') return;
     GM.col = col; store.set('gmCol', id); GM.filter = ''; $('gmFilter').value = '';
     gmLoad(Math.min(gi || 0, col.games.length - 1));
   }
@@ -1632,7 +1658,7 @@
     const g = GM.col.games[i]; GM.gi = i; GM.game = g; store.set('gmGame', i);
     GM.start = g.fen ? Pos.fromFen(g.fen) : Pos.start();
     GM.moves = []; for (let k = 0; k < g.m.length; k += 4) GM.moves.push(decodeM(g.m.substr(k, 4)));
-    GM.stat = { ok: 0, near: 0, tot: 0, skip: 0 }; GM.key = {};
+    gmResetStat(); GM.key = {};
     GM.gside = g.res === -1 ? BLACK : RED; // mặc định đoán nước bên thắng
     S.userSide = GM.guess ? GM.gside : RED;
     gmGoto(0);
@@ -1665,7 +1691,7 @@
     }
     if (key) { S.state = 'user'; GM.flash = GM.flash && GM.flash.n > 0 ? GM.flash : { title: '⚑ Thời điểm then chốt', cls: 'inacc', n: 1 }; gmShow(['Ở thế này chỉ có một nước tốt rõ rệt. Đại sư sẽ đi gì?']); return; }
     // nước thường: đại sư đi luôn
-    GM.stat.skip++;
+    if (!GM.skipped.has(ply)) { GM.skipped.add(ply); GM.stat.skip++; } // lùi rồi đi lại không đếm lần nữa
     S.state = 'ai';
     GM.flash = { title: 'Nước thường: ' + S.pos.moveName(GM.moves[ply]), cls: null, n: 1 };
     gmShow();
@@ -1713,9 +1739,16 @@
     S.coach = { title: 'Đang so sánh với nước đại sư…', cls: null, lines: [], busy: true }; render();
     const pa = before.clone(); pa.make(m);
     const pb = before.clone(); pb.make(master);
-    const ra = await engine.analyse(pa, { timeMs: 900, multipv: 1 }); if (tok !== S.tok || !ra) return;
-    const rb = await engine.analyse(pb, { timeMs: 900, multipv: 1 }); if (tok !== S.tok || !rb) return;
-    const sa = -ra.multi[0].score, sb = -rb.multi[0].score, diff = clampS(sb) - clampS(sa);
+    // điểm của bên vừa đi sau nước đó; đối phương hết nước (chiếu bí) thì không cần hỏi máy
+    const scoreAfter = async (p) => {
+      if (!p.legalMoves().length) return MATE - 1;
+      const r = await engine.analyse(p, { timeMs: 900, multipv: 1 });
+      if (tok !== S.tok || !r) return null;
+      return r.multi[0] ? -r.multi[0].score : 0;
+    };
+    const sa = await scoreAfter(pa); if (sa === null) return;
+    const sb = await scoreAfter(pb); if (sb === null) return;
+    const diff = Math.max(0, clampS(sb) - clampS(sa));
     let verdict, cls;
     if (diff <= 30) { verdict = 'Nước của bạn được máy đánh giá tương đương (chênh ' + (diff / 100).toFixed(1) + ').'; cls = 'good'; GM.stat.near++; }
     else if (diff <= 120) { verdict = 'Nước của đại sư tốt hơn khoảng ' + (diff / 100).toFixed(1) + ' Tốt.'; cls = 'inacc'; }
@@ -1823,8 +1856,8 @@
     else if (a === 'gm-key') { GM.keyOnly = !GM.keyOnly; store.set('gmKey', GM.keyOnly); if (GM.guess && S.state !== 'ai') gmGoto(GM.ply); else render(); }
     else if (a === 'analyze') analyzeGame();
     else if (a === 'gm-last') { GM.guess = false; S.userSide = RED; gmGoto(GM.moves.length); }
-    else if (a === 'gm-guess') { GM.guess = !GM.guess; S.userSide = GM.guess ? GM.gside : RED; GM.stat = { ok: 0, near: 0, tot: 0, skip: 0 }; gmGoto(GM.guess ? 0 : GM.ply); }
-    else if (a === 'gm-side') { GM.gside = -GM.gside; if (GM.guess) { S.userSide = GM.gside; GM.stat = { ok: 0, near: 0, tot: 0 }; gmGoto(0); } else gmShow(); }
+    else if (a === 'gm-guess') { GM.guess = !GM.guess; S.userSide = GM.guess ? GM.gside : RED; gmResetStat(); gmGoto(GM.guess ? 0 : GM.ply); }
+    else if (a === 'gm-side') { GM.gside = -GM.gside; if (GM.guess) { S.userSide = GM.gside; gmResetStat(); gmGoto(0); } else gmShow(); }
     else if (a === 'pz-prev') loadPuzzle(PZ.idx - 1);
     else if (a === 'pz-restart') loadPuzzle(PZ.idx);
     else if (a === 'pz-solution') showSolution();
@@ -1834,7 +1867,7 @@
   });
   $('olCode').onkeydown = (e) => { if (e.key === 'Enter') { const c = e.target.value.trim().toUpperCase(); if (c) olStart('join', c); } };
   $('hintBtn').onclick = () => S.mode === 'online' ? null : (S.mode === 'puzzle' ? puzzleHint() : S.mode === 'play' && S.drill ? S.state === 'user' && drillHint() : S.mode === 'games' ? (S.state === 'reveal' ? (S.coach.gmNext = false, gmGoto(GM.ply + 1)) : gmGoto(GM.ply + 1)) : showHint());
-  $('undoBtn').onclick = () => S.mode === 'online' ? null : (S.mode === 'puzzle' ? loadPuzzle(PZ.idx) : S.mode === 'games' ? gmGoto(GM.guess ? Math.max(0, GM.ply - 2) : GM.ply - 1) : undo());
+  $('undoBtn').onclick = () => S.mode === 'online' ? null : (S.mode === 'puzzle' ? loadPuzzle(PZ.idx) : S.mode === 'games' ? gmGoto(GM.guess ? gmPrevAsk() : GM.ply - 1) : undo());
   $('pzCol').onchange = (e) => openCollection(e.target.value, 0);
   $('impBtn').onclick = () => {
     if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi để nhập ván mới?')) return;
@@ -1843,8 +1876,8 @@
     if (!err) $('impText').value = '';
   };
   $('fenBtn').onclick = async () => {
-    const f = S.pos.toFen();
-    try { await navigator.clipboard.writeText(f); $('impErr').textContent = 'Đã chép FEN thế cờ hiện tại.'; } catch (e) { $('impText').value = f; }
+    const f = (S.view >= 0 ? S.hist[S.view].before : S.pos).toFen(); // đang xem lại thì chép thế cờ đang xem
+    try { await navigator.clipboard.writeText(f); $('impErr').textContent = 'Đã chép FEN thế cờ đang hiển thị.'; } catch (e) { $('impText').value = f; }
   };
   $('drillBtn').onclick = () => {
     if (S.drill) { S.tok++; stopDrill(true); return; }
