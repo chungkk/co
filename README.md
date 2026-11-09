@@ -17,4 +17,5 @@ Nguồn: [chasoft/community-xiangqi-games-database](https://github.com/chasoft/c
 - `tools/hanviet.js`: phiên âm Hán-Việt (tên kỳ thủ, khai cuộc ECCO, tên thế cờ).
 - `node build-book.js <data/tournaments>` → `data/book.json`: sách khai cuộc từ ~104k ván giải đấu (24 nửa nước đầu).
 - `node build-classics.js <id>` → `data/puzzles/<id>.json`: sát cục cổ phổ/sách sát pháp, engine kiểm chứng.
+- `node dedupe-puzzles.js`: bỏ thế cờ trùng trong cùng bộ (bài giữ chỉ số gốc ở trường `k` để tiến độ đã lưu không lệch). Thế cờ có ở nhiều bộ: giải một lần là tính đã giải ở mọi bộ.
 - `node build-games.js` → `data/games/`: 46 bộ ván đại sư (~8.8k ván) để xem lại và luyện đoán nước.

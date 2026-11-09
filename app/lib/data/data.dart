@@ -59,7 +59,10 @@ class Puzzle {
   final List<int> sol;
   final String? theme, name;
   final List<(int, String)> notes;
-  Puzzle(this.fen, this.n, this.sol, this.theme, this.name, this.notes);
+
+  /// Chỉ số gốc trong bộ (khi bộ đã lọc bài trùng), dùng làm khóa tiến độ
+  final int? k;
+  Puzzle(this.fen, this.n, this.sol, this.theme, this.name, this.notes, [this.k]);
 
   factory Puzzle.fromJson(Map<String, dynamic> j) => Puzzle(
     j['fen'] as String,
@@ -68,6 +71,7 @@ class Puzzle {
     j['theme'] as String?,
     j['name'] as String?,
     [for (final x in (j['notes'] as List?) ?? const []) ((x as List)[0] as int, x[1] as String)],
+    j['k'] as int?,
   );
 }
 

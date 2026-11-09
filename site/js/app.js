@@ -756,17 +756,24 @@
   const PZ = { cols: [{ id: BUILTIN.id, title: BUILTIN.title, count: BUILTIN.items.length }], col: BUILTIN, idx: 0, cur: null, fails: 0, hintStep: 0, cache: { 'thuc-chien': BUILTIN } };
   // tiến độ: "bộ:số thứ tự"; chuyển đổi dữ liệu cũ (chỉ lưu id số của bộ thực chiến)
   PZ.solved = new Set(store.get('solved', []).map((x) => (typeof x === 'number' ? 'thuc-chien:' + (x - 1) : x)));
-  fetch('data/puzzles/index.json?v=1').then((r) => r.json()).then((list) => { PZ.cols = PZ.cols.concat(list); renderPuzzle(); }).catch(() => {});
+  fetch('data/puzzles/index.json?v=2').then((r) => r.json()).then((list) => { PZ.cols = PZ.cols.concat(list); renderPuzzle(); }).catch(() => {});
   const usedMoves = () => S.hist.filter((h) => h.by === 'user').length;
-  const pzKey = (i) => PZ.col.id + ':' + i;
+  // "k": chỉ số gốc của bài (giữ nguyên khi bộ đã lọc bài trùng)
+  const pzKey = (i) => PZ.col.id + ':' + (PZ.col.items[i].k ?? i);
+  // cùng thế cờ có mặt ở nhiều bộ: giải ở bộ nào cũng tính là đã giải
+  PZ.solvedFen = new Set(store.get('solvedFen', []));
+  const isSolved = (i) => PZ.solved.has(pzKey(i)) || PZ.solvedFen.has(PZ.col.items[i].fen);
 
   async function openCollection(id, idx) {
     let col = PZ.cache[id];
     if (!col) {
-      try { col = await (await fetch('data/puzzles/' + id + '.json?v=1')).json(); PZ.cache[id] = col; }
+      try { col = await (await fetch('data/puzzles/' + id + '.json?v=2')).json(); PZ.cache[id] = col; }
       catch (e) { col = BUILTIN; }
     }
     PZ.col = col; store.set('pzCol', col.id);
+    const n0 = PZ.solvedFen.size;
+    col.items.forEach((p, i) => { if (PZ.solved.has(pzKey(i))) PZ.solvedFen.add(p.fen); });
+    if (PZ.solvedFen.size !== n0) store.set('solvedFen', [...PZ.solvedFen]);
     loadPuzzle(idx || 0);
   }
   function setMode(mode) {
@@ -851,6 +858,7 @@
   function puzzleSolved() {
     S.state = 'done'; S.arrows = [];
     PZ.solved.add(pzKey(PZ.idx)); store.set('solved', [...PZ.solved]);
+    PZ.solvedFen.add(PZ.cur.fen); store.set('solvedFen', [...PZ.solvedFen]);
     const lines = [
       PZ.fails ? 'Bạn giải được sau ' + PZ.fails + ' lần thử sai.' : 'Giải đúng ngay lần đầu!',
       'Các nước: ' + S.hist.map((h) => h.name).join(' → '),
@@ -903,13 +911,13 @@
     const opts = PZ.cols.map((c) => `<option value="${c.id}"${c.id === PZ.col.id ? ' selected' : ''}>${esc(c.title)} (${c.count})</option>`).join('');
     if (sel.dataset.sig !== opts) { sel.innerHTML = opts; sel.dataset.sig = opts; }
     const items = PZ.col.items;
-    const done = items.filter((_, i) => PZ.solved.has(pzKey(i))).length;
+    const done = items.filter((_, i) => isSolved(i)).length;
     $('pzProgress').textContent = 'Đã giải ' + done + '/' + items.length;
     const groups = [];
     for (const n of [...new Set(items.map((p) => p.n))].sort((a, b) => a - b)) {
       const its = items.map((p, i) => [p, i]).filter(([p]) => p.n === n);
       groups.push(`<div class="pzg"><div class="pzg-h">Chiếu bí ${n} nước · ${its.length} bài</div><div class="pzgrid">` +
-        its.map(([p, i]) => `<button class="pz${PZ.solved.has(pzKey(i)) ? ' ok' : ''}${i === PZ.idx ? ' cur' : ''}" data-pz="${i}" title="${esc((p.name ? p.name + ' · ' : '') + (p.theme || ''))}">${i + 1}</button>`).join('') + '</div></div>');
+        its.map(([p, i]) => `<button class="pz${isSolved(i) ? ' ok' : ''}${i === PZ.idx ? ' cur' : ''}" data-pz="${i}" title="${esc((p.name ? p.name + ' · ' : '') + (p.theme || ''))}">${i + 1}</button>`).join('') + '</div></div>');
     }
     const html = groups.join('');
     if ($('pzList').dataset.sig !== html) { $('pzList').innerHTML = html; $('pzList').dataset.sig = html; }

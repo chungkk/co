@@ -29,6 +29,7 @@ if (!cfg) { console.log(Object.keys(COLS).join(' ')); process.exit(0); }
 const S = new Search();
 const files = D.walk(BASE + cfg.dir).sort();
 const items = [];
+const fens = new Set(); // cùng một thế cờ có thể lặp trong sách gốc
 let seen = 0, tested = 0;
 for (const f of files) {
   const g = D.parseFile(f);
@@ -47,6 +48,8 @@ for (const f of files) {
   if (!th) continue;
   let name = '';
   if (cfg.named) name = hv(g.title.replace(/^.*?局\s*[-—–]?\s*/, '').replace(/^\d+[-.、\s]*/, ''));
+  if (fens.has(start.toFen())) continue;
+  fens.add(start.toFen());
   const it = { fen: start.toFen(), n: (sol.length + 1) / 2, sol, theme: th.theme, themes: th.themes };
   if (name && !/\?/.test(name)) it.name = name;
   if (cfg.comments) {

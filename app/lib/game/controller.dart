@@ -133,6 +133,9 @@ class GameController extends ChangeNotifier {
   final Map<String, PuzzleCollection> _pzCache = {};
   late Set<String> pzSolved;
 
+  /// Thế cờ đã giải (theo FEN): cùng thế cờ ở nhiều bộ chỉ cần giải một lần
+  late Set<String> pzSolvedFen;
+
   // Ván đại sư
   List<CollectionInfo>? gmIndex;
   GameCollection? gmCol;
@@ -159,6 +162,7 @@ class GameController extends ChangeNotifier {
       sound: o['sound'] as bool? ?? true,
     );
     pzSolved = store.get<List<dynamic>>('solved', []).map((x) => x is int ? 'thuc-chien:${x - 1}' : x as String).toSet();
+    pzSolvedFen = store.get<List<dynamic>>('solvedFen', []).cast<String>().toSet();
   }
 
   Future<void> init() async {
@@ -927,8 +931,8 @@ class GameController extends ChangeNotifier {
 
   // ---------- Bài tập sát cục ----------
   int _usedMoves() => hist.where((h) => h.by == 'user').length;
-  String _pzKey(int i) => '${pzCol!.id}:$i';
-  bool isSolved(int i) => pzCol != null && pzSolved.contains(_pzKey(i));
+  String _pzKey(int i) => '${pzCol!.id}:${pzCol!.items[i].k ?? i}';
+  bool isSolved(int i) => pzCol != null && (pzSolved.contains(_pzKey(i)) || pzSolvedFen.contains(pzCol!.items[i].fen));
   int get solvedCount => pzCol == null
       ? 0
       : [
@@ -948,6 +952,11 @@ class GameController extends ChangeNotifier {
     }
     pzCol = col;
     store.set('pzCol', col.id);
+    final n0 = pzSolvedFen.length;
+    for (var i = 0; i < col.items.length; i++) {
+      if (pzSolved.contains(_pzKey(i))) pzSolvedFen.add(col.items[i].fen);
+    }
+    if (pzSolvedFen.length != n0) store.set('solvedFen', pzSolvedFen.toList());
     loadPuzzle(idx);
   }
 
@@ -1078,6 +1087,8 @@ class GameController extends ChangeNotifier {
     arrows = [];
     pzSolved.add(_pzKey(pzIdx));
     store.set('solved', pzSolved.toList());
+    pzSolvedFen.add(pzCur!.fen);
+    store.set('solvedFen', pzSolvedFen.toList());
     _fx('win', 480);
     final lines = [
       pzFails > 0 ? 'Bạn giải được sau $pzFails lần thử sai.' : 'Giải đúng ngay lần đầu!',
