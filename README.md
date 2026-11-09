@@ -17,7 +17,7 @@ Máy chủ lỗi/bận (503) hoặc không có mạng thì tự dùng engine tro
 - Biến môi trường: `ENGINES` (số tiến trình, mặc định 2), `HASH_MB` (mặc định 64).
 - Điểm Pikafish nhân 1,2 (`REMOTE_SCALE`) để giữ ngưỡng xếp loại nước đi của engine cũ.
 - Giấy phép: Pikafish là GPLv3 (chạy trên máy chủ, không phân phối kèm app). File mạng `pikafish.nnue` có giấy phép riêng (`NNUE-License.md`): **không dùng cho mục đích thương mại khi chưa được phép**.
-- Chạy thử cục bộ: build Pikafish (`make build ARCH=apple-silicon` trong `src/`, đặt `pikafish.nnue` cùng thư mục) rồi `PIKAFISH=/đường/dẫn/pikafish PORT=8081 node server/engine-server.js`.
+- Chạy thử cục bộ: build Pikafish (`make build ARCH=apple-silicon` trong `src/`, đặt `pikafish.nnue` cùng thư mục) rồi `PIKAFISH=/đường/dẫn/pikafish ENGINE_PORT=8081 node server/engine-server.js`.
 
 ## Bài tập sát cục
 `tools/`: đào thế cờ từ ván máy tự đánh (`node mine.js <seed> <số ván>`), phân loại đòn (`classify.js`), chọn bộ bài (`select.js` → `site/js/puzzles.js`). Chạy trong thư mục `tools/`.

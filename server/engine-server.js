@@ -3,7 +3,8 @@
 //   PIKAFISH   đường dẫn file chạy (mặc định /opt/pikafish/pikafish); pikafish.nnue nằm cùng thư mục
 //   ENGINES    số tiến trình engine (mặc định 2), mỗi tiến trình 1 luồng
 //   HASH_MB    bộ nhớ băm mỗi tiến trình (mặc định 64)
-//   PORT       cổng nghe (mặc định 8080, chỉ 127.0.0.1)
+//   ENGINE_PORT  cổng nghe (mặc định 8080, chỉ 127.0.0.1). Không dùng PORT/HOST vì nền tảng
+//                triển khai (Coolify…) hay tự gán chúng cho cả container (nginx đã giữ cổng 80).
 'use strict';
 const http = require('http');
 const { spawn } = require('child_process');
@@ -12,8 +13,8 @@ const path = require('path');
 const BIN = process.env.PIKAFISH || '/opt/pikafish/pikafish';
 const ENGINES = Math.max(1, +process.env.ENGINES || 2);
 const HASH_MB = Math.max(16, +process.env.HASH_MB || 64);
-const PORT = +process.env.PORT || 8080;
-const HOST = process.env.HOST || '127.0.0.1';
+const PORT = +process.env.ENGINE_PORT || 8080;
+const HOST = process.env.ENGINE_HOST || '127.0.0.1';
 const MAX_QUEUE = 16; // quá số này trả 503 để máy khách dùng engine trong trình duyệt
 const MAX_PER_IP = 3; // số yêu cầu đang chờ tối đa của một địa chỉ
 const MAX_MS = 2000, MIN_MS = 100, MAX_PV = 5;
@@ -164,5 +165,6 @@ const server = http.createServer((req, res) => {
 
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
+server.on('error', (e) => { log('engine-server không mở được cổng', HOST + ':' + PORT, e.message); process.exit(1); });
 for (let i = 0; i < ENGINES; i++) pool.push(new Engine(i));
-server.listen(PORT, HOST, () => log('engine-server nghe', HOST + ':' + PORT, 'engines', ENGINES, 'bin', BIN));
+server.listen(PORT, HOST, () => log('engine-server nghe', HOST + ':' + PORT, 'engines', ENGINES, 'bin', BIN, 'node', process.version));
