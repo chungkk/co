@@ -967,7 +967,7 @@
     $('hintBtn').innerHTML = S.mode === 'games' ? 'Tiến ▶ <kbd>→</kbd>' : '<span>💡</span> Gợi ý <kbd>H</kbd>';
     if (S.mode === 'games') {
       const g = GM.game;
-      t = !g ? 'Đang tải…' : S.state === 'user' ? 'Đến lượt ' + sideName(GM.gside) + ': đại sư sẽ đi nước nào?' : S.state === 'ai' ? 'Đang so sánh…' : S.state === 'reveal' ? 'Xem nước đại sư rồi bấm Tiếp tục' : GM.ply >= GM.moves.length ? 'Hết ván' : 'Nước ' + GM.ply + '/' + GM.moves.length;
+      t = !g ? 'Đang tải…' : S.state === 'user' ? 'Đến lượt ' + sideName(GM.gside) + ': đại sư sẽ đi nước nào?' : S.state === 'ai' ? (S.coach && S.coach.busy ? 'Đang so sánh…' : 'Đại sư đang đi…') : S.state === 'reveal' ? 'Xem nước đại sư rồi bấm Tiếp tục' : GM.ply >= GM.moves.length ? 'Hết ván' : 'Nước ' + GM.ply + '/' + GM.moves.length;
       $('status').textContent = t;
       $('status').className = 'status' + (S.state === 'ai' ? ' thinking' : '');
       $('hintBtn').disabled = !g || GM.ply >= GM.moves.length || S.state === 'ai' || S.state === 'user';
@@ -1346,7 +1346,10 @@
   }
 
   // ---------- Ván đại sư: xem lại & luyện đoán nước ----------
-  const GM = { index: null, col: null, game: null, moves: [], start: null, ply: 0, guess: false, gside: RED, stat: { ok: 0, near: 0, tot: 0 }, cache: {}, filter: '' };
+  const GM = { index: null, col: null, game: null, moves: [], start: null, ply: 0, guess: false, gside: RED, stat: { ok: 0, near: 0, tot: 0, skip: 0 }, cache: {}, filter: '', key: {} };
+  // chỉ hỏi ở thời điểm then chốt: nước tốt nhất hơn nước nhì ít nhất KEY_GAP (≈1 Tốt)
+  GM.keyOnly = store.get('gmKey', true);
+  const KEY_GAP = 100;
   const decodeM = (s) => ((+s[1]) * 9 + (+s[0])) | (((+s[3]) * 9 + (+s[2])) << 7);
   async function gmEnter() {
     S.state = 'gview'; S.hist = []; S.arrows = [];
@@ -1369,7 +1372,7 @@
     const g = GM.col.games[i]; GM.gi = i; GM.game = g; store.set('gmGame', i);
     GM.start = g.fen ? Pos.fromFen(g.fen) : Pos.start();
     GM.moves = []; for (let k = 0; k < g.m.length; k += 4) GM.moves.push(decodeM(g.m.substr(k, 4)));
-    GM.stat = { ok: 0, near: 0, tot: 0 };
+    GM.stat = { ok: 0, near: 0, tot: 0, skip: 0 }; GM.key = {};
     GM.gside = g.res === -1 ? BLACK : RED; // mặc định đoán nước bên thắng
     S.userSide = GM.guess ? GM.gside : RED;
     gmGoto(0);
@@ -1381,8 +1384,33 @@
     for (let k = 0; k < ply; k++) { const m = GM.moves[k]; const b = p.clone(); S.hist.push({ m, name: p.moveName(m), by: 'ai', before: b }); p.make(m); }
     S.pos = p; GM.ply = ply; S.view = -1; S.selected = -1; S.arrows = [];
     S.state = GM.guess && ply < GM.moves.length && p.side === GM.gside ? 'user' : 'gview';
+    if (S.state === 'user' && GM.keyOnly) return gmCheckKey();
     gmShow();
     if (GM.guess && S.state === 'gview' && ply < GM.moves.length) gmAutoReply();
+  }
+  // thế cờ có phải thời điểm then chốt (chỉ một nước tốt rõ rệt)? Không thì tự đi nước đại sư
+  async function gmCheckKey() {
+    const tok = S.tok, ply = GM.ply;
+    let key = GM.key[ply];
+    if (key === undefined) {
+      S.state = 'ai';
+      if (S.pos.legalMoves().length < 2) key = false;
+      else {
+        gmShow(['Đang tìm thời điểm then chốt…']);
+        const r = await engine.analyse(S.pos.clone(), { timeMs: 600, multipv: 2 });
+        if (tok !== S.tok || !r) return;
+        key = r.multi.length >= 2 && clampS(r.multi[0].score) - clampS(r.multi[1].score) >= KEY_GAP;
+      }
+      GM.key[ply] = key;
+    }
+    if (key) { S.state = 'user'; GM.flash = GM.flash && GM.flash.n > 0 ? GM.flash : { title: '⚑ Thời điểm then chốt', cls: 'inacc', n: 1 }; gmShow(['Ở thế này chỉ có một nước tốt rõ rệt. Đại sư sẽ đi gì?']); return; }
+    // nước thường: đại sư đi luôn
+    GM.stat.skip++;
+    S.state = 'ai';
+    GM.flash = { title: 'Nước thường: ' + S.pos.moveName(GM.moves[ply]), cls: null, n: 1 };
+    gmShow();
+    await sleep(450); if (tok !== S.tok || S.mode !== 'games') return;
+    gmGoto(ply + 1);
   }
   async function gmAutoReply() {
     const tok = S.tok; await sleep(700); if (tok !== S.tok || S.mode !== 'games') return;
@@ -1405,7 +1433,7 @@
     if (extra) lines.push(...extra);
     if (GM.guess) {
       const st = GM.stat;
-      lines.push('Luyện đoán nước bên ' + sideName(GM.gside) + ': trùng ' + st.ok + '/' + st.tot + (st.near ? ', tương đương ' + st.near : '') + (st.tot ? ' (' + Math.round(100 * (st.ok + st.near) / st.tot) + '%)' : ''));
+      lines.push('Luyện đoán nước bên ' + sideName(GM.gside) + ': trùng ' + st.ok + '/' + st.tot + (st.near ? ', tương đương ' + st.near : '') + (st.tot ? ' (' + Math.round(100 * (st.ok + st.near) / st.tot) + '%)' : '') + (st.skip ? ' · tự đi ' + st.skip + ' nước thường' : ''));
     }
     const fl = GM.flash && GM.flash.n-- > 0 ? GM.flash : null;
     S.coach = { title: fl ? fl.title : (GM.col ? GM.col.title : '') + ' · Ván ' + (GM.gi + 1), cls: fl ? fl.cls : null, lines };
@@ -1472,7 +1500,9 @@
     lines.push('Mẹo: chọn cấp 4–5 trong "Đấu với máy" để máy chống trả mạnh nhất.');
     playFrom({ fen: GM.start.toFen(), moves: GM.moves.slice(0, GM.ply), side, title: (GM.col.title || 'Ván đại sư') + ' · ván ' + (GM.gi + 1), lines });
   }
+  function renderKeyToggle() { const b = $('gmKey'); if (b) { b.classList.toggle('on', GM.keyOnly); b.setAttribute('aria-pressed', GM.keyOnly); } }
   function gmButtons() {
+    renderKeyToggle();
     if (S.mode !== 'games' || !S.coach || !S.coach.gmNext) return '';
     return '<div class="confirm"><button class="btn primary" data-act="gm-next">Tiếp tục →</button></div>';
   }
@@ -1523,9 +1553,10 @@
     else if (a === 'gm-next') { S.coach.gmNext = false; gmGoto(GM.ply + 1); }
     else if (a === 'gm-first') gmGoto(0);
     else if (a === 'gm-play') gmPlay();
+    else if (a === 'gm-key') { GM.keyOnly = !GM.keyOnly; store.set('gmKey', GM.keyOnly); if (GM.guess && S.state !== 'ai') gmGoto(GM.ply); else render(); }
     else if (a === 'analyze') analyzeGame();
     else if (a === 'gm-last') { GM.guess = false; S.userSide = RED; gmGoto(GM.moves.length); }
-    else if (a === 'gm-guess') { GM.guess = !GM.guess; S.userSide = GM.guess ? GM.gside : RED; GM.stat = { ok: 0, near: 0, tot: 0 }; gmGoto(GM.guess ? 0 : GM.ply); }
+    else if (a === 'gm-guess') { GM.guess = !GM.guess; S.userSide = GM.guess ? GM.gside : RED; GM.stat = { ok: 0, near: 0, tot: 0, skip: 0 }; gmGoto(GM.guess ? 0 : GM.ply); }
     else if (a === 'gm-side') { GM.gside = -GM.gside; if (GM.guess) { S.userSide = GM.gside; GM.stat = { ok: 0, near: 0, tot: 0 }; gmGoto(0); } else gmShow(); }
     else if (a === 'pz-prev') loadPuzzle(PZ.idx - 1);
     else if (a === 'pz-restart') loadPuzzle(PZ.idx);

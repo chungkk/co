@@ -251,11 +251,31 @@ void main() {
     expect(g.gmPly, 1);
     g.secondaryAction();
     expect(g.gmPly, 0);
+    g.gmKeyOnly = false; // hỏi mọi nước (chế độ then chốt có test riêng)
     g.gmToggleGuess();
     await waitFor(() => g.state == 'user');
     final master = g.gmMoves[g.gmPly];
     g.tapSquare(master & 127);
     g.tapSquare(master >> 7);
     expect(g.gmOk, 1);
+  });
+
+  test('đoán nước: chỉ hỏi nước then chốt, tắt thì hỏi mọi nước', () async {
+    await g.setMode(Mode.games);
+    await waitFor(() => g.gmGame != null);
+    expect(g.gmKeyOnly, isTrue);
+    g.gmToggleGuess();
+    await waitFor(() => g.state == 'user', seconds: 60);
+    // đã tự đi các nước thường trước thời điểm then chốt đầu tiên
+    expect(g.gmSkip, greaterThan(0));
+    expect(g.gmPly, greaterThan(0));
+    expect(g.coach!.lines.join(' '), contains('một nước tốt rõ rệt'));
+    // tắt: hỏi ngay từ nước đầu
+    g.gmToggleKey();
+    expect(g.store.get<bool>('gmKey', true), isFalse);
+    g.gmToggleGuess();
+    g.gmToggleGuess();
+    expect(g.gmPly, 0);
+    expect(g.state, 'user');
   });
 }

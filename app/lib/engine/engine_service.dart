@@ -71,7 +71,8 @@ class EngineService {
   /// true: lần phân tích gần nhất dùng Pikafish; false: engine trong app; null: chưa phân tích
   bool? remoteUsed;
   int _remoteOff = 0, _remoteFails = 0, _gen = 0;
-  HttpClient _http = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+  HttpClient? _httpClient;
+  HttpClient get _http => _httpClient ??= HttpClient()..connectionTimeout = const Duration(seconds: 4);
 
   Isolate? _iso;
   ReceivePort? _rx;
@@ -161,8 +162,8 @@ class EngineService {
   /// Dừng mọi tìm kiếm đang chạy (giết isolate, tạo mới).
   void reset() {
     _gen++;
-    _http.close(force: true);
-    _http = HttpClient()..connectionTimeout = const Duration(seconds: 4);
+    _httpClient?.close(force: true);
+    _httpClient = null;
     _iso?.kill(priority: Isolate.immediate);
     _iso = null;
     _rx?.close();
@@ -174,7 +175,7 @@ class EngineService {
   }
 
   void dispose() {
-    _http.close(force: true);
+    _httpClient?.close(force: true);
     _iso?.kill(priority: Isolate.immediate);
     _rx?.close();
   }

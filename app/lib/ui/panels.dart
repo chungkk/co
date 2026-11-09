@@ -702,6 +702,18 @@ class GamesCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
+          Material(
+            color: Colors.transparent,
+            child: SwitchListTile.adaptive(
+              dense: true,
+              contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+              title: const Text('Chỉ hỏi nước then chốt', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+              subtitle: Text('Khi luyện đoán nước: tự đi các nước thường, chỉ dừng ở thế có một nước tốt rõ rệt', style: _small(context)),
+              value: g.gmKeyOnly,
+              onChanged: g.state == 'ai' ? null : (_) => g.gmToggleKey(),
+            ),
+          ),
+          const SizedBox(height: 4),
           AppButton(
             label: 'Đánh tiếp với máy từ thế này',
             icon: Icons.sports_esports_outlined,

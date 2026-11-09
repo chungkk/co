@@ -160,7 +160,12 @@ class GameController extends ChangeNotifier {
   int gmPly = 0;
   bool gmGuess = false;
   int gmSide = RED;
-  int gmOk = 0, gmNear = 0, gmTot = 0;
+  int gmOk = 0, gmNear = 0, gmTot = 0, gmSkip = 0;
+
+  /// Chỉ hỏi ở thời điểm then chốt: nước tốt nhất hơn nước nhì ít nhất [keyGap] (≈1 Tốt)
+  bool gmKeyOnly = true;
+  static const keyGap = 100;
+  final Map<int, bool> _gmKey = {};
   final Map<String, GameCollection> _gmCache = {};
   String gmFilter = '';
   ({String title, String? cls, int n})? _gmFlash;
@@ -177,6 +182,7 @@ class GameController extends ChangeNotifier {
     );
     pzSolved = store.get<List<dynamic>>('solved', []).map((x) => x is int ? 'thuc-chien:${x - 1}' : x as String).toSet();
     pzSolvedFen = store.get<List<dynamic>>('solvedFen', []).cast<String>().toSet();
+    gmKeyOnly = store.get<bool>('gmKey', true);
     reviews = [
       for (final x in store.get<List<dynamic>>('review', []))
         if (x is Map<String, dynamic>) ReviewCard.fromJson(x),
@@ -211,13 +217,19 @@ class GameController extends ChangeNotifier {
 
   Mode? _mode;
 
+  bool _disposed = false;
+
   @override
   void dispose() {
+    _disposed = true;
+    tok++; // huỷ các tác vụ đang chờ (máy đáp, tự đi nước…)
     engine.dispose();
     super.dispose();
   }
 
-  void _render() => notifyListeners();
+  void _render() {
+    if (!_disposed) notifyListeners();
+  }
   void _fx(String k, [int delayMs = 0]) {
     if (!opt.sound || onFx == null) return;
     if (delayMs <= 0) {
@@ -1183,7 +1195,7 @@ class GameController extends ChangeNotifier {
     if (mode == Mode.games) {
       if (gmGame == null) return 'Đang tải…';
       if (state == 'user') return 'Đến lượt ${sideName(gmSide)}: đại sư sẽ đi nước nào?';
-      if (state == 'ai') return 'Đang so sánh…';
+      if (state == 'ai') return coach?.busy ?? false ? 'Đang so sánh…' : 'Đại sư đang đi…';
       if (state == 'reveal') return 'Xem nước đại sư rồi bấm Tiếp tục';
       if (gmPly >= gmMoves.length) return 'Hết ván';
       return 'Nước $gmPly/${gmMoves.length}';
@@ -1903,7 +1915,8 @@ class GameController extends ChangeNotifier {
     store.set('gmGame', i);
     _gmStart = g.fen != null ? Pos.fromFen(g.fen!) : Pos.start();
     gmMoves = g.decodeMoves();
-    gmOk = gmNear = gmTot = 0;
+    _gmKey.clear();
+    gmOk = gmNear = gmTot = gmSkip = 0;
     gmSide = g.res == -1 ? BLACK : RED; // mặc định đoán nước bên thắng
     userSide = gmGuess ? gmSide : RED;
     gmGoto(0);
@@ -1938,8 +1951,54 @@ class GameController extends ChangeNotifier {
       moveSerial++;
     }
     state = gmGuess && ply < gmMoves.length && p.side == gmSide ? 'user' : 'gview';
+    if (state == 'user' && gmKeyOnly) {
+      _gmCheckKey();
+      return;
+    }
     _gmShow();
     if (gmGuess && state == 'gview' && ply < gmMoves.length) _gmAutoReply();
+  }
+
+  /// Thế cờ có phải thời điểm then chốt (chỉ một nước tốt rõ rệt)? Không thì tự đi nước đại sư.
+  Future<void> _gmCheckKey() async {
+    final t = tok, ply = gmPly;
+    var key = _gmKey[ply];
+    if (key == null) {
+      state = 'ai';
+      if (pos.legalMoves().length < 2) {
+        key = false;
+      } else {
+        _gmShow(extra: ['Đang tìm thời điểm then chốt…']);
+        final r = await engine.analyse(pos.clone(), const SearchOpts(timeMs: 600, multipv: 2));
+        if (t != tok || r == null) return;
+        key = r.multi.length >= 2 && clampS(r.multi[0].score) - clampS(r.multi[1].score) >= keyGap;
+      }
+      _gmKey[ply] = key;
+    }
+    if (key) {
+      state = 'user';
+      if (_gmFlash == null || _gmFlash!.n <= 0) _gmFlash = (title: '⚑ Thời điểm then chốt', cls: 'inacc', n: 1);
+      _gmShow(extra: ['Ở thế này chỉ có một nước tốt rõ rệt. Đại sư sẽ đi gì?']);
+      return;
+    }
+    // nước thường: đại sư đi luôn
+    gmSkip++;
+    state = 'ai';
+    _gmFlash = (title: 'Nước thường: ${pos.moveName(gmMoves[ply])}', cls: null, n: 1);
+    _gmShow();
+    await Future.delayed(const Duration(milliseconds: 450));
+    if (t != tok || mode != Mode.games) return;
+    gmGoto(ply + 1);
+  }
+
+  void gmToggleKey() {
+    gmKeyOnly = !gmKeyOnly;
+    store.set('gmKey', gmKeyOnly);
+    if (gmGuess && state != 'ai') {
+      gmGoto(gmPly);
+    } else {
+      _render();
+    }
   }
 
   Future<void> _gmAutoReply() async {
@@ -1979,7 +2038,7 @@ class GameController extends ChangeNotifier {
     return '';
   }
 
-  void _gmShow() {
+  void _gmShow({List<String> extra = const []}) {
     if (gmGame == null) {
       _render();
       return;
@@ -1987,11 +2046,13 @@ class GameController extends ChangeNotifier {
     final lines = _gmInfoLines();
     final note = _gmNote(gmPly);
     if (note.isNotEmpty) lines.add('Bình luận: $note');
+    lines.addAll(extra);
     if (gmGuess) {
       lines.add(
         'Luyện đoán nước bên ${sideName(gmSide)}: trùng $gmOk/$gmTot'
         '${gmNear > 0 ? ', tương đương $gmNear' : ''}'
-        '${gmTot > 0 ? ' (${(100 * (gmOk + gmNear) / gmTot).round()}%)' : ''}',
+        '${gmTot > 0 ? ' (${(100 * (gmOk + gmNear) / gmTot).round()}%)' : ''}'
+        '${gmSkip > 0 ? ' · tự đi $gmSkip nước thường' : ''}',
       );
     }
     final fl = _gmFlash;
@@ -2105,7 +2166,7 @@ class GameController extends ChangeNotifier {
   void gmToggleGuess() {
     gmGuess = !gmGuess;
     userSide = gmGuess ? gmSide : RED;
-    gmOk = gmNear = gmTot = 0;
+    gmOk = gmNear = gmTot = gmSkip = 0;
     gmGoto(gmGuess ? 0 : gmPly);
   }
 
@@ -2113,7 +2174,7 @@ class GameController extends ChangeNotifier {
     gmSide = -gmSide;
     if (gmGuess) {
       userSide = gmSide;
-      gmOk = gmNear = gmTot = 0;
+      gmOk = gmNear = gmTot = gmSkip = 0;
       gmGoto(0);
     } else {
       _gmShow();
