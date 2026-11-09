@@ -71,14 +71,65 @@
     constructor() { this.spawn(); }
     spawn() {
       this.w = new Worker('js/worker.js?v=3');
-      this.q = new Map(); this.id = 0;
+      this.q = new Map(); this.id = 0; this.ctl = this.ctl || new Set();
       this.w.onmessage = (e) => { const cb = this.q.get(e.data.id); if (cb) { this.q.delete(e.data.id); cb(e.data); } };
     }
     search(pos, opts) {
       const id = ++this.id;
       return new Promise((res) => { this.q.set(id, res); this.w.postMessage({ id, fen: pos.toFen(), hist: pos.historyPairs(), opts }); });
     }
-    reset() { this.w.terminate(); for (const cb of this.q.values()) cb(null); this.spawn(); }
+    reset() {
+      this.w.terminate(); for (const cb of this.q.values()) cb(null); this.spawn();
+      for (const c of this.ctl) { c.byReset = true; c.abort(); }
+    }
+    // Phân tích để chấm nước: Pikafish trên máy chủ (server/engine-server.js), mạnh hơn nhiều;
+    // máy chủ lỗi/bận/không có thì dùng engine trong trình duyệt. Máy đối thủ và bài tập vẫn dùng search().
+    async analyse(pos, opts) {
+      if (Date.now() >= REMOTE.off) {
+        const ctl = new AbortController(), ms = opts.timeMs || 1000;
+        this.ctl.add(ctl);
+        const timer = setTimeout(() => ctl.abort(), ms + 4000);
+        try {
+          const r = await fetch('api/analyse', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctl.signal,
+            body: JSON.stringify({ fen: pos.toFen(), multipv: opts.multipv || 1, ms }),
+          });
+          if (r.ok) {
+            const res = fromRemote(pos, await r.json());
+            if (res) { REMOTE.fails = 0; REMOTE.used = true; return res; }
+          } else if (r.status === 404 || r.status === 405 || r.status === 501) REMOTE.off = Infinity; // trang tĩnh, không có máy chủ
+          else if (r.status !== 503 && r.status !== 429) remoteFail(); // 503/429: máy chủ bận, lần này dùng engine trong trình duyệt
+        } catch (e) {
+          if (ctl.byReset) return null;
+          remoteFail();
+        } finally { clearTimeout(timer); this.ctl.delete(ctl); }
+      }
+      REMOTE.used = false;
+      return this.search(pos, opts);
+    }
+  }
+  const REMOTE = { off: 0, fails: 0, used: null }, REMOTE_SCALE = 1.2;
+  // lỗi liên tiếp 3 lần thì tạm nghỉ gọi máy chủ 1 phút
+  function remoteFail() { if (++REMOTE.fails >= 3) { REMOTE.off = Date.now() + 60000; REMOTE.fails = 0; } }
+  // ô UCI ("e2") → chỉ số ô (hàng 0 là phía Đen)
+  const uciSq = (u) => (9 - +u[1]) * 9 + (u.charCodeAt(0) - 97);
+  function fromRemote(pos, d) {
+    const multi = [];
+    for (const x of d.multi || []) {
+      const p = pos.clone(), pv = [];
+      for (const u of x.pv || []) {
+        if (!/^[a-i]\d[a-i]\d$/.test(u)) break;
+        const m = uciSq(u) | (uciSq(u.slice(2)) << 7);
+        if (!p.isLegal(m)) break;
+        pv.push(m); p.make(m);
+      }
+      if (!pv.length) continue;
+      // điểm chiếu bí theo số nửa nước như engine trong trình duyệt; điểm thường nhân REMOTE_SCALE
+      // vì thang của Pikafish nhỏ hơn ~20% (thiếu Mã: -310 so với -374), để giữ nguyên ngưỡng xếp loại nước đi
+      const score = x.mate != null ? (x.mate > 0 ? MATE - (2 * x.mate - 1) : -(MATE - 2 * -x.mate)) : Math.max(-MATE + 500, Math.min(MATE - 500, Math.round((x.cp | 0) * REMOTE_SCALE)));
+      multi.push({ move: pv[0], score, pv });
+    }
+    return multi.length ? { multi, all: multi.map((x) => ({ move: x.move, score: x.score, exact: true })), depth: d.depth, remote: true } : null;
   }
   const engine = new Engine();
 
@@ -389,14 +440,14 @@
       S.coach = { title: 'Đang phân tích ván… ' + (k + 1) + '/' + todo.length, cls: null, lines: ['Máy chấm từng nước của bạn (khoảng 1 giây mỗi nước). Có thể bấm vào các nước đã chấm để xem.'], busy: true };
       render();
       const before = h.before, after = before.clone(); after.make(h.m);
-      const rb = await engine.search(before.clone(), { timeMs: 700, multipv: 1 });
+      const rb = await engine.analyse(before.clone(), { timeMs: 700, multipv: 1 });
       if (tok !== S.tok || !rb || !rb.multi[0]) return;
       const best = rb.multi[0];
       let userScore = best.score, reply = null;
       if (h.m !== best.move) {
         if (!after.legalMoves().length) userScore = MATE - 1;
         else {
-          const ra = await engine.search(after.clone(), { timeMs: 500, multipv: 1 });
+          const ra = await engine.analyse(after.clone(), { timeMs: 500, multipv: 1 });
           if (tok !== S.tok || !ra) return;
           userScore = ra.multi[0] ? -ra.multi[0].score : 0; reply = ra.multi[0] && ra.multi[0].move;
         }
@@ -515,7 +566,7 @@
   function startUserTurn() {
     S.state = 'user'; S.selected = -1;
     const pos = S.pos.clone(), tok = S.tok;
-    S.pre = { tok, p: engine.search(pos, { timeMs: COACH_MS, multipv: 3 }) };
+    S.pre = { tok, p: engine.analyse(pos, { timeMs: COACH_MS, multipv: 3 }) };
     S.pre.p.then((r) => { if (r && tok === S.tok && S.state === 'user') { S.lastScore = r.multi[0] ? r.multi[0].score : 0; renderEval(); } });
     render();
   }
@@ -539,7 +590,7 @@
     if (over) userScore = MATE - 1;
     else if (found) { userScore = found.score; if (found.pv[1]) reply = found.pv[1]; }
     else {
-      const r = await engine.search(pos.clone(), { timeMs: Math.round(COACH_MS * 0.8), multipv: 1 });
+      const r = await engine.analyse(pos.clone(), { timeMs: Math.round(COACH_MS * 0.8), multipv: 1 });
       if (tok !== S.tok || !r) return;
       userScore = -r.multi[0].score; reply = r.multi[0].move;
     }
@@ -950,6 +1001,7 @@
   function render() {
     renderPieces(); renderOverlay(); renderCoach(); renderMoves(); renderStatus(); if (S.mode === 'play') renderEval(); renderPuzzle(); renderPro(); renderGames();
     $('level').value = S.level; $('side').value = S.userSide;
+    $('engInfo').textContent = REMOTE.used === true ? 'Máy chấm: Pikafish trên máy chủ (mạnh, cần mạng).' : REMOTE.used === false ? 'Máy chấm: engine trong trình duyệt (không kết nối được máy chủ Pikafish).' : '';
     $('optWarn').checked = S.opt.warn; $('optThreats').checked = S.opt.threats; $('optHan').checked = S.opt.han;
   }
 
@@ -1026,9 +1078,9 @@
     let ok = m === c.best, loss = 0;
     if (!ok && m !== c.played) {
       // chấp nhận nước khác nếu máy đánh giá ngang nước tốt nhất
-      const rb = await engine.search(before.clone(), { timeMs: 900, multipv: 1 });
+      const rb = await engine.analyse(before.clone(), { timeMs: 900, multipv: 1 });
       if (tok !== S.tok || !rb) return;
-      const ra = S.pos.legalMoves().length ? await engine.search(S.pos.clone(), { timeMs: 900, multipv: 1 }) : null;
+      const ra = S.pos.legalMoves().length ? await engine.analyse(S.pos.clone(), { timeMs: 900, multipv: 1 }) : null;
       if (tok !== S.tok) return;
       const sb = rb.multi[0] ? rb.multi[0].score : 0, sa = ra && ra.multi[0] ? -ra.multi[0].score : MATE;
       loss = Math.max(0, clampS(sb) - clampS(sa));
@@ -1373,8 +1425,8 @@
     S.coach = { title: 'Đang so sánh với nước đại sư…', cls: null, lines: [], busy: true }; render();
     const pa = before.clone(); pa.make(m);
     const pb = before.clone(); pb.make(master);
-    const ra = await engine.search(pa, { timeMs: 900, multipv: 1 }); if (tok !== S.tok || !ra) return;
-    const rb = await engine.search(pb, { timeMs: 900, multipv: 1 }); if (tok !== S.tok || !rb) return;
+    const ra = await engine.analyse(pa, { timeMs: 900, multipv: 1 }); if (tok !== S.tok || !ra) return;
+    const rb = await engine.analyse(pb, { timeMs: 900, multipv: 1 }); if (tok !== S.tok || !rb) return;
     const sa = -ra.multi[0].score, sb = -rb.multi[0].score, diff = clampS(sb) - clampS(sa);
     let verdict, cls;
     if (diff <= 30) { verdict = 'Nước của bạn được máy đánh giá tương đương (chênh ' + (diff / 100).toFixed(1) + ').'; cls = 'good'; GM.stat.near++; }

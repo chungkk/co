@@ -1,5 +1,6 @@
 // Chạy thử luồng của cả 3 chế độ với engine thật (isolate) và dữ liệu đóng gói.
 import 'package:co_tuong/engine/engine.dart';
+import 'package:co_tuong/engine/engine_service.dart';
 import 'package:co_tuong/game/controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -19,6 +20,7 @@ void main() {
 
   late GameController g;
   setUp(() async {
+    EngineService.remoteUrl = null; // test chạy offline với engine trong app
     SharedPreferences.setMockInitialValues({});
     g = GameController(Store(await SharedPreferences.getInstance()));
     await g.init();

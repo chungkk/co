@@ -608,6 +608,17 @@ Future<void> showSettings(BuildContext context, GameController g) {
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
                   child: Text(
+                    switch (g.engine.remoteUsed) {
+                      true => 'Máy chấm: Pikafish trên máy chủ (mạnh, cần mạng).',
+                      false => 'Máy chấm: engine trong app (không kết nối được máy chủ Pikafish).',
+                      null => 'Máy chấm: Pikafish trên máy chủ khi có mạng, engine trong app khi không có mạng.',
+                    },
+                    style: TextStyle(fontSize: 13, color: pal.muted),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                  child: Text(
                     'Ký hiệu nước đi: Quân · cột · tiến/thoái/bình · số. Cột đánh số 1–9 từ phải sang trái theo phía mỗi bên '
                     '(xem số ở mép bàn cờ). Ví dụ "Pháo 2 bình 5" là Pháo ở cột 2 đi ngang sang cột 5.',
                     style: TextStyle(fontSize: 13, color: pal.muted),

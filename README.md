@@ -9,6 +9,16 @@ Web tĩnh (HTML/CSS/JS thuần), deploy tại https://co.halle.biz qua Coolify t
 
 Chạy thử: `cd site && python3 -m http.server 8765`
 
+## Máy chấm Pikafish (máy chủ)
+Thầy chấm nước, gợi ý, phân tích ván, đoán nước đại sư và ôn lỗi gọi `POST /api/analyse` tới
+[Pikafish](https://github.com/official-pikafish/Pikafish) chạy trên máy chủ (`server/engine-server.js`, Node không cần thư viện).
+Máy chủ lỗi/bận (503) hoặc không có mạng thì tự dùng engine trong trình duyệt/app; máy đối thủ và bài tập sát cục vẫn dùng engine cũ.
+- `Dockerfile`: biên dịch Pikafish bản phát hành cố định (kiểm SHA-256 mã nguồn, gói phát hành, `pikafish.nnue`), nginx chuyển `/api/` sang Node (cổng 8080 nội bộ).
+- Biến môi trường: `ENGINES` (số tiến trình, mặc định 2), `HASH_MB` (mặc định 64).
+- Điểm Pikafish nhân 1,2 (`REMOTE_SCALE`) để giữ ngưỡng xếp loại nước đi của engine cũ.
+- Giấy phép: Pikafish là GPLv3 (chạy trên máy chủ, không phân phối kèm app). File mạng `pikafish.nnue` có giấy phép riêng (`NNUE-License.md`): **không dùng cho mục đích thương mại khi chưa được phép**.
+- Chạy thử cục bộ: build Pikafish (`make build ARCH=apple-silicon` trong `src/`, đặt `pikafish.nnue` cùng thư mục) rồi `PIKAFISH=/đường/dẫn/pikafish PORT=8081 node server/engine-server.js`.
+
 ## Bài tập sát cục
 `tools/`: đào thế cờ từ ván máy tự đánh (`node mine.js <seed> <số ván>`), phân loại đòn (`classify.js`), chọn bộ bài (`select.js` → `site/js/puzzles.js`). Chạy trong thư mục `tools/`.
 

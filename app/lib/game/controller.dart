@@ -622,7 +622,7 @@ class GameController extends ChangeNotifier {
       );
       _render();
       final before = h.before, after = before.clone()..make(h.m);
-      final rb = await engine.search(before.clone(), const SearchOpts(timeMs: 700, multipv: 1));
+      final rb = await engine.analyse(before.clone(), const SearchOpts(timeMs: 700, multipv: 1));
       if (t != tok || rb == null || rb.multi.isEmpty) return;
       final best = rb.multi[0];
       var userScore = best.score;
@@ -631,7 +631,7 @@ class GameController extends ChangeNotifier {
         if (after.legalMoves().isEmpty) {
           userScore = MATE - 1;
         } else {
-          final ra = await engine.search(after.clone(), const SearchOpts(timeMs: 500, multipv: 1));
+          final ra = await engine.analyse(after.clone(), const SearchOpts(timeMs: 500, multipv: 1));
           if (t != tok || ra == null) return;
           userScore = ra.multi.isNotEmpty ? -ra.multi[0].score : 0;
           reply = ra.multi.isNotEmpty ? ra.multi[0].move : null;
@@ -829,7 +829,7 @@ class GameController extends ChangeNotifier {
     state = 'user';
     selected = -1;
     final p = pos.clone(), t = tok;
-    final f = engine.search(p, const SearchOpts(timeMs: coachMs, multipv: 3));
+    final f = engine.analyse(p, const SearchOpts(timeMs: coachMs, multipv: 3));
     _pre = f;
     f.then((r) {
       if (r != null && t == tok && state == 'user' && r.multi.isNotEmpty) {
@@ -873,7 +873,7 @@ class GameController extends ChangeNotifier {
       userScore = found.score;
       if (found.pv.length > 1) reply = found.pv[1];
     } else {
-      final r = await engine.search(pos.clone(), SearchOpts(timeMs: (coachMs * 0.8).round(), multipv: 1));
+      final r = await engine.analyse(pos.clone(), SearchOpts(timeMs: (coachMs * 0.8).round(), multipv: 1));
       if (t != tok || r == null || r.multi.isEmpty) return;
       userScore = -r.multi[0].score;
       reply = r.multi[0].move;
@@ -1460,11 +1460,11 @@ class GameController extends ChangeNotifier {
     var loss = 0;
     if (!ok && m != c.played) {
       // chấp nhận nước khác nếu máy đánh giá ngang nước tốt nhất
-      final rb = await engine.search(before.clone(), const SearchOpts(timeMs: 900, multipv: 1));
+      final rb = await engine.analyse(before.clone(), const SearchOpts(timeMs: 900, multipv: 1));
       if (t != tok || rb == null) return;
       SearchResult? ra;
       if (pos.legalMoves().isNotEmpty) {
-        ra = await engine.search(pos.clone(), const SearchOpts(timeMs: 900, multipv: 1));
+        ra = await engine.analyse(pos.clone(), const SearchOpts(timeMs: 900, multipv: 1));
         if (t != tok) return;
       }
       final sb = rb.multi.isNotEmpty ? rb.multi[0].score : 0;
@@ -2024,9 +2024,9 @@ class GameController extends ChangeNotifier {
     _render();
     final pa = before.clone()..make(m);
     final pb = before.clone()..make(master);
-    final ra = await engine.search(pa, const SearchOpts(timeMs: 900, multipv: 1));
+    final ra = await engine.analyse(pa, const SearchOpts(timeMs: 900, multipv: 1));
     if (t != tok || ra == null) return;
-    final rb = await engine.search(pb, const SearchOpts(timeMs: 900, multipv: 1));
+    final rb = await engine.analyse(pb, const SearchOpts(timeMs: 900, multipv: 1));
     if (t != tok || rb == null) return;
     final sa = ra.multi.isEmpty ? MATE : -ra.multi[0].score, sb = rb.multi.isEmpty ? MATE : -rb.multi[0].score;
     final diff = clampS(sb) - clampS(sa);
