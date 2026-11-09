@@ -170,6 +170,8 @@ class GameController extends ChangeNotifier {
   bool gmGuess = false;
   int gmSide = RED;
   int gmOk = 0, gmNear = 0, gmTot = 0, gmSkip = 0;
+  final Set<int> _gmSkipped = {}; // nước thường đã đếm (lùi rồi đi lại không đếm lần nữa)
+  int _gmReq = 0, _pzReq = 0; // lần tải bộ ván/bộ bài mới nhất
 
   /// Chỉ hỏi ở thời điểm then chốt: nước tốt nhất hơn nước nhì ít nhất [keyGap] (≈1 Tốt)
   bool gmKeyOnly = true;
@@ -388,6 +390,7 @@ class GameController extends ChangeNotifier {
     engine.reset();
     startFen = null;
     gameTitle = null;
+    userSide = prefSide;
     pos = Pos.start();
     hist = [];
     selected = -1;
@@ -983,6 +986,7 @@ class GameController extends ChangeNotifier {
       if (hold && pos.side != userSide && pos.legalMoves().isNotEmpty) {
         // giữ nguyên thế cờ (máy chưa đi tiếp) cho tới khi người chơi bấm phân tích
         state = 'user';
+        _pre = null; // chưa tới lượt mình: không có phân tích sẵn để gợi ý
         _render();
       } else if (!_checkOver()) {
         if (pos.side == userSide) {
@@ -1271,7 +1275,8 @@ class GameController extends ChangeNotifier {
   }
 
   Future<void> _showHint() async {
-    if (state != 'user' || view >= 0) return;
+    // giữ thế cờ (chưa tới lượt mình, chưa có phân tích sẵn) thì không gợi ý
+    if (state != 'user' || view >= 0 || _pre == null || pos.side != userSide) return;
     final t = tok, p = pos.clone();
     hintsUsed++;
     coach = Coach('Đang phân tích…', busy: true);
@@ -1373,6 +1378,7 @@ class GameController extends ChangeNotifier {
   bool get canHint {
     if (mode == Mode.online) return false;
     if (mode == Mode.games) return gmGame != null && gmPly < gmMoves.length && state != 'ai' && state != 'user';
+    if (mode == Mode.play) return state == 'user' && view < 0 && pos.side == userSide;
     return state == 'user' && view < 0;
   }
 
@@ -1395,7 +1401,7 @@ class GameController extends ChangeNotifier {
     if (mode == Mode.puzzle) {
       loadPuzzle(pzIdx);
     } else if (mode == Mode.games) {
-      gmGoto(gmGuess ? math.max(0, gmPly - 2) : gmPly - 1);
+      gmGoto(gmGuess ? _gmPrevAsk() : gmPly - 1);
     } else {
       _undo();
     }
@@ -1547,6 +1553,9 @@ class GameController extends ChangeNotifier {
     store.set('level', l);
     _render();
   }
+
+  /// Bên đã chọn ở "Cầm quân" cho ván mới (ván nhập/đánh tiếp/online có thể đang cầm bên khác)
+  int get prefSide => store.get<int>('side', RED);
 
   void setSide(int s) {
     userSide = s;
@@ -1792,6 +1801,7 @@ class GameController extends ChangeNotifier {
         ].length;
 
   Future<void> openCollection(String id, [int idx = 0]) async {
+    final req = ++_pzReq;
     if (id == reviewColId) {
       pzCol = _reviewCollection();
       store.set('pzCol', reviewColId);
@@ -1806,6 +1816,8 @@ class GameController extends ChangeNotifier {
       }
       _pzCache[col.id] = col;
     }
+    // trong lúc tải đã sang tab khác hoặc chọn bộ khác
+    if (req != _pzReq || mode != Mode.puzzle) return;
     pzCol = col;
     store.set('pzCol', col.id);
     final n0 = pzSolvedFen.length;
@@ -2114,6 +2126,7 @@ class GameController extends ChangeNotifier {
 
   Future<void> gmOpenCol(String? id, [int gi = 0]) async {
     if (id == null) return;
+    final req = ++_gmReq;
     var col = _gmCache[id];
     if (col == null) {
       try {
@@ -2123,6 +2136,8 @@ class GameController extends ChangeNotifier {
         return;
       }
     }
+    // trong lúc tải đã sang tab khác hoặc chọn bộ khác
+    if (req != _gmReq || mode != Mode.games) return;
     gmCol = col;
     store.set('gmCol', id);
     gmFilter = '';
@@ -2139,9 +2154,20 @@ class GameController extends ChangeNotifier {
     gmMoves = g.decodeMoves();
     _gmKey.clear();
     gmOk = gmNear = gmTot = gmSkip = 0;
+    _gmSkipped.clear();
     gmSide = g.res == -1 ? BLACK : RED; // mặc định đoán nước bên thắng
     userSide = gmGuess ? gmSide : RED;
     gmGoto(0);
+  }
+
+  /// Lần hỏi gần nhất trước nước hiện tại (bỏ qua các nước thường đã tự đi khi chỉ hỏi nước then chốt)
+  int _gmPrevAsk() {
+    final s0 = _gmStart!.side;
+    for (var k = gmPly - 1; k >= 0; k--) {
+      final side = k.isOdd ? -s0 : s0;
+      if (side == gmSide && (!gmKeyOnly || _gmKey[k] == true)) return k;
+    }
+    return 0;
   }
 
   void gmGoto(int ply) {
@@ -2204,7 +2230,7 @@ class GameController extends ChangeNotifier {
       return;
     }
     // nước thường: đại sư đi luôn
-    gmSkip++;
+    if (_gmSkipped.add(ply)) gmSkip++;
     state = 'ai';
     _gmFlash = (title: 'Nước thường: ${pos.moveName(gmMoves[ply])}', cls: null, n: 1);
     _gmShow();
@@ -2389,6 +2415,7 @@ class GameController extends ChangeNotifier {
     gmGuess = !gmGuess;
     userSide = gmGuess ? gmSide : RED;
     gmOk = gmNear = gmTot = gmSkip = 0;
+    _gmSkipped.clear();
     gmGoto(gmGuess ? 0 : gmPly);
   }
 
@@ -2397,6 +2424,7 @@ class GameController extends ChangeNotifier {
     if (gmGuess) {
       userSide = gmSide;
       gmOk = gmNear = gmTot = gmSkip = 0;
+    _gmSkipped.clear();
       gmGoto(0);
     } else {
       _gmShow();

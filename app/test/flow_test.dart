@@ -279,4 +279,56 @@ void main() {
     expect(g.gmPly, 0);
     expect(g.state, 'user');
   });
+
+  test('giữ thế cờ sau ván online: không gợi ý; "Cầm quân" vẫn là bên cho ván mới', () async {
+    // ván online cầm Đen, nước cuối là của mình (đối thủ đầu hàng): bên tới lượt là Đỏ
+    final p = Pos.start(), m1 = moveNamed(p, 'Pháo 2 bình 5');
+    p.make(m1);
+    final m2 = moveNamed(p, 'Mã 8 tiến 7');
+    await g.playFrom(moves: [m1, m2], side: BLACK, lines: const [], mine: true, hold: true);
+    expect(g.state, 'user');
+    expect(g.pos.side, RED);
+    expect(g.canHint, isFalse);
+    g.primaryAction(); // không được treo ở "Đang phân tích…"
+    expect(g.coach!.busy, isFalse);
+    expect(g.userSide, BLACK);
+    expect(g.prefSide, RED);
+    g.newGame();
+    expect(g.userSide, RED);
+  });
+
+  test('đổi tab khi bộ ván đại sư đang tải: không ghi đè bàn cờ "Đấu với máy"', () async {
+    await g.setMode(Mode.games);
+    await waitFor(() => g.gmGame != null);
+    // chọn bộ khác (đang tải) rồi chuyển ngay sang "Đấu với máy"
+    final other = g.gmIndex!.firstWhere((c) => c.id != g.gmCol!.id).id;
+    final f = g.gmOpenCol(other);
+    await g.setMode(Mode.play);
+    await f;
+    await Future.delayed(const Duration(milliseconds: 500));
+    expect(g.mode, Mode.play);
+    expect(g.state, isIn(['user', 'ai']));
+    expect(g.pos.toFen(), START_FEN);
+  });
+
+  test('đoán nước then chốt: Lùi về lần hỏi trước, không tự đi lại', () async {
+    await g.setMode(Mode.games);
+    await waitFor(() => g.gmGame != null);
+    g.gmToggleGuess();
+    await waitFor(() => g.state == 'user', seconds: 60);
+    final first = g.gmPly, skip = g.gmSkip;
+    // đoán đúng nước đại sư để tới lần hỏi tiếp theo
+    final m = g.gmMoves[first];
+    g.tapSquare(m & 127);
+    g.tapSquare(m >> 7);
+    await waitFor(() => g.state == 'user' && g.gmPly > first, seconds: 90);
+    final skip2 = g.gmSkip;
+    g.secondaryAction();
+    await waitFor(() => g.state == 'user', seconds: 30);
+    await Future.delayed(const Duration(seconds: 2));
+    expect(g.gmPly, first);
+    expect(g.state, 'user');
+    expect(g.gmSkip, skip2); // các nước thường đã đếm không bị đếm lại
+    expect(skip2, greaterThanOrEqualTo(skip));
+  }, timeout: const Timeout(Duration(minutes: 4)));
 }

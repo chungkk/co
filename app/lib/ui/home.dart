@@ -294,10 +294,10 @@ class PlayControls extends StatelessWidget {
           Expanded(
             child: _Picker<int>(
               label: 'Cầm quân',
-              value: g.userSide,
+              value: g.prefSide,
               items: const {RED: 'Đỏ (đi trước)', BLACK: 'Đen'},
               onChanged: (s) {
-                if (s != g.userSide) g.setSide(s);
+                if (s != g.prefSide) g.setSide(s);
               },
             ),
           ),
