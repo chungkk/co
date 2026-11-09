@@ -87,6 +87,7 @@
     pos: Pos.start(), userSide: store.get('side', RED), level: store.get('level', 3),
     hist: [], state: 'user', pre: null, tok: 0, selected: -1, arrows: [], view: -1,
     coach: null, hintsUsed: 0, result: null, lastScore: 0,
+    startFen: null, // null = thế ban đầu; khác: ván bắt đầu từ thế cờ này (tàn cục, ván nhập vào)
     opt: Object.assign({ warn: true, threats: true, han: true }, store.get('opt', {})),
   };
 
@@ -214,7 +215,7 @@
   function bookMoves(pos, names) {
     const pm = proMoves(pos);
     if (pm) return pm.filter((x) => x.share >= 0.05 && x.n >= 10).map((x) => x.m);
-    if (PRO.pos) return [];
+    if (PRO.pos || S.startFen) return [];
     if (names.length >= 10) return [];
     const legal = pos.legalMoves(), out = new Set();
     for (const line of BOOK) {
@@ -228,6 +229,7 @@
     return [...out];
   }
   function openingOf(names) {
+    if (S.startFen) return null;
     const e = ecoOf();
     if (e) { const old = oldOpening(names); return { name: e.name, tip: old && old.tip }; }
     return oldOpening(names);
@@ -241,6 +243,7 @@
     return best;
   }
   const histNames = () => S.hist.map((h) => h.name);
+  const startPos = () => (S.startFen ? Pos.fromFen(S.startFen) : Pos.start());
 
   // ---------- Luyện khai cuộc theo cây nước đại sư ----------
   const DRILL_OPS = [{ name: 'Tự do (theo đại sư)', seq: [] }].concat(OPENINGS.filter((o, i) => OPENINGS.findIndex((x) => x.name === o.name) === i));
@@ -256,14 +259,14 @@
   function startDrill(k) {
     if (!PRO.pos) return;
     const op = DRILL_OPS[k] || DRILL_OPS[0];
-    S.tok++; engine.reset();
+    S.tok++; engine.reset(); S.startFen = null; S.gameTitle = null;
     S.pos = Pos.start(); S.hist = []; S.selected = -1; S.arrows = []; S.view = -1; S.result = null;
     S.hintsUsed = 0; S.lastScore = 0;
     for (const nm of op.seq) {
       const m = S.pos.legalMoves().find((x) => S.pos.moveName(x) === nm);
       if (m === undefined) break;
       const before = S.pos.clone(); S.pos.make(m);
-      S.hist.push({ m, name: nm, by: before.side === S.userSide ? 'user' : 'ai', before });
+      S.hist.push({ m, name: nm, by: 'ai', before }); // nước dựng sẵn của khai cuộc, không tính là nước của người chơi
     }
     S.drill = { name: op.name, ok: 0, tot: 0, fails: 0 };
     const lines = [
@@ -345,13 +348,112 @@
     stopDrill(false);
   }
 
+  // ---------- Ván từ thế cờ bất kỳ: tàn cục đại sư, ván/thế cờ nhập vào ----------
+  // ghi ván vào bộ nhớ rồi chuyển sang chế độ đấu: restore() sẽ dựng lại và cho máy/người đi tiếp
+  // mine: các nước có sẵn là của người chơi (ván nhập vào) hay của người khác (ván đại sư)
+  function playFrom({ fen, moves, side, title, lines, mine }) {
+    store.set('game', { side, fen: fen || null, title: title || null, moves: moves.map((m, i) => ({ m, by: null, i })), hints: 0 });
+    // gán người đi cho từng nước theo bên cầm quân
+    const p = fen ? Pos.fromFen(fen) : Pos.start();
+    const g = store.get('game');
+    g.moves.forEach((e) => { e.by = mine && p.side === side ? 'user' : 'ai'; delete e.i; p.make(e.m); });
+    store.set('game', g);
+    S.pendingCoach = { title: title || 'Ván mới từ thế cờ', cls: null, lines };
+    if (S.mode === 'play') { S.tok++; engine.reset(); if (!restore()) newGame(); }
+    else setMode('play');
+  }
+  const CLS_ACC = { best: 100, book: 100, good: 90, inacc: 65, mistake: 35, blunder: 5 };
+  function classify(loss, isBest, isBook, userScore, bestScore) {
+    let cls;
+    if (isBest) cls = 'best';
+    else if (isBook && loss <= 120) cls = 'book';
+    else if (loss <= 20) cls = 'best';
+    else if (loss <= 60) cls = 'good';
+    else if (loss <= 150) cls = 'inacc';
+    else if (loss <= 320) cls = 'mistake';
+    else cls = 'blunder';
+    // đang thắng/thua quá rõ thì không bắt lỗi khắt khe
+    if (clampS(userScore) > 1500 && cls !== 'blunder' && !(bestScore > MATE - 500 && userScore < MATE - 500)) cls = cls === 'best' ? 'best' : 'good';
+    if (bestScore > MATE - 500 && userScore < MATE - 500 && cls !== 'blunder') cls = 'mistake';
+    return cls;
+  }
+  // chấm lại từng nước của người chơi trong ván (ván nhập vào chưa có điểm)
+  async function analyzeGame() {
+    const todo = S.hist.map((h, i) => [h, i]).filter(([h]) => h.by === 'user' && !h.cls);
+    if (!todo.length) return;
+    const tok = ++S.tok; engine.reset();
+    S.state = 'analyze'; S.view = -1; S.arrows = [];
+    let saved = 0;
+    for (let k = 0; k < todo.length; k++) {
+      const [h] = todo[k];
+      S.coach = { title: 'Đang phân tích ván… ' + (k + 1) + '/' + todo.length, cls: null, lines: ['Máy chấm từng nước của bạn (khoảng 1 giây mỗi nước). Có thể bấm vào các nước đã chấm để xem.'], busy: true };
+      render();
+      const before = h.before, after = before.clone(); after.make(h.m);
+      const rb = await engine.search(before.clone(), { timeMs: 700, multipv: 1 });
+      if (tok !== S.tok || !rb || !rb.multi[0]) return;
+      const best = rb.multi[0];
+      let userScore = best.score, reply = null;
+      if (h.m !== best.move) {
+        if (!after.legalMoves().length) userScore = MATE - 1;
+        else {
+          const ra = await engine.search(after.clone(), { timeMs: 500, multipv: 1 });
+          if (tok !== S.tok || !ra) return;
+          userScore = ra.multi[0] ? -ra.multi[0].score : 0; reply = ra.multi[0] && ra.multi[0].move;
+        }
+      }
+      const loss = Math.max(0, clampS(best.score) - clampS(userScore));
+      const pm = proMoves(before), bx = pm && pm.find((y) => y.m === h.m);
+      const cls = classify(loss, h.m === best.move, !!(bx && bx.share >= 0.05 && bx.n >= 10), userScore, best.score);
+      h.cls = cls; h.loss = loss; h.acc = Math.round(100 * Math.exp(-loss / 280));
+      h.best = best.move; h.bestName = before.moveName(best.move);
+      const lines = [];
+      if (cls === 'best' || cls === 'book' || cls === 'good') {
+        if (bx) lines.push('Nước của đại sư: ' + bx.n.toLocaleString('vi') + ' ván (' + pct(bx.share) + ').');
+        lines.push(...explain(before, h.m, userScore).map((x) => '• ' + x));
+        if (cls === 'good' && h.m !== best.move) lines.push('Máy thích ' + h.bestName + ' hơn một chút.');
+      } else {
+        lines.push('Bạn mất khoảng ' + (loss / 100).toFixed(1) + ' Tốt lợi thế.');
+        if (reply && after.isLegal(reply)) lines.push('Vì đối phương có thể đáp ' + after.moveName(reply) + ': ' + lc(explain(after, reply, undefined, { short: true }).join(' ')));
+        lines.push('Nước tốt hơn: ' + h.bestName + '.');
+        if (pm && pm.length) lines.push('Đại sư thường đi: ' + proLine(pm, 3) + '.');
+        lines.push(...explain(before, best.move, best.score).map((x) => '• ' + x));
+        if ((cls === 'mistake' || cls === 'blunder') && addReview(before, h.m, best.move, loss)) saved++;
+      }
+      h.coach = { title: CLS[cls].icon + ' ' + h.name + ': ' + CLS[cls].label, cls, lines };
+      save();
+    }
+    const mine = S.hist.filter((h) => h.by === 'user' && h.cls);
+    const cnt = {}; let acc = 0;
+    for (const h of mine) { cnt[h.cls] = (cnt[h.cls] || 0) + 1; acc += h.acc != null ? h.acc : CLS_ACC[h.cls]; }
+    const lines = ['Độ chính xác của bạn: ' + Math.round(acc / mine.length) + '%', Object.keys(CLS).filter((k) => cnt[k]).map((k) => CLS[k].icon + ' ' + CLS[k].short + ': ' + cnt[k]).join(' · ')];
+    lines.push('Bấm vào các nước đánh dấu ? hoặc ?? trong danh sách nước đi để xem nên đi thế nào.');
+    if (saved) lines.push('📌 ' + saved + ' thế cờ đi sai đã được lưu vào "Ôn lỗi sai của bạn" (tab Bài tập).');
+    S.coach = { title: 'Phân tích xong', cls: null, lines };
+    if (checkOver()) { S.coach = { title: 'Phân tích xong', cls: null, lines: [S.result.text].concat(lines) }; render(); }
+    else if (S.pos.side === S.userSide) startUserTurn(); else aiTurn();
+  }
+  function importGame(text, side) {
+    const r = Notation.parse(text);
+    if (r.err) return r.err;
+    const start = r.fen ? Pos.fromFen(r.fen) : Pos.start();
+    const end = start.clone(); for (const m of r.moves) end.make(m);
+    const s = side === 'move' ? end.side : +side;
+    const lines = [];
+    lines.push(r.moves.length ? 'Đã nhập ' + r.moves.length + ' nửa nước' + (r.fen ? ' từ thế cờ FEN' : '') + '. Bạn cầm ' + sideName(s) + '.' : 'Đã nhập thế cờ. Bạn cầm ' + sideName(s) + '.');
+    if (r.warn) lines.push('⚠️ ' + r.warn);
+    if (r.moves.length) lines.push('Bấm "Phân tích ván" để thầy chấm từng nước của bạn; các nước sai sẽ vào sổ "Ôn lỗi sai". Hoặc cứ đánh tiếp với máy.');
+    else lines.push('Đánh tiếp với máy từ thế này. Thầy chấm từng nước như bình thường.');
+    playFrom({ fen: r.fen, moves: r.moves, side: s, title: 'Ván nhập vào', lines, mine: true });
+    return null;
+  }
+
   // ---------- Luồng ván cờ ----------
   function save() {
     if (S.mode === 'puzzle') return;
-    store.set('game', { side: S.userSide, moves: S.hist.map((h) => ({ m: h.m, by: h.by, cls: h.cls, coach: h.coach })), hints: S.hintsUsed });
+    store.set('game', { side: S.userSide, fen: S.startFen, title: S.gameTitle, moves: S.hist.map((h) => ({ m: h.m, by: h.by, cls: h.cls, coach: h.coach })), hints: S.hintsUsed });
   }
   function newGame(keepSide) {
-    S.tok++; engine.reset(); S.drill = null;
+    S.tok++; engine.reset(); S.drill = null; S.startFen = null; S.gameTitle = null;
     if (!keepSide) S.userSide = store.get('side', RED);
     S.pos = Pos.start(); S.hist = []; S.selected = -1; S.arrows = []; S.view = -1; S.result = null;
     S.hintsUsed = 0; S.lastScore = 0;
@@ -362,9 +464,9 @@
   function restore() {
     const g = store.get('game', null);
     S.drill = null;
-    if (!g || !g.moves || !g.moves.length) return false;
+    if (!g || !g.moves || (!g.moves.length && !g.fen)) return false;
     try {
-      S.userSide = g.side; S.pos = Pos.start(); S.hist = [];
+      S.userSide = g.side; S.startFen = g.fen || null; S.gameTitle = g.title || null; S.pos = startPos(); S.hist = [];
       for (const e of g.moves) {
         if (!S.pos.isLegal(e.m)) throw new Error('bad');
         const before = S.pos.clone();
@@ -373,11 +475,12 @@
       }
       S.hintsUsed = g.hints || 0;
       // nếu đang chờ xác nhận nước hỏng thì coi như đã đi
-      S.coach = { title: 'Tiếp tục ván cũ', cls: null, lines: ['Ván cờ trước đã được khôi phục.'] };
+      S.coach = S.pendingCoach || { title: 'Tiếp tục ván cũ', cls: null, lines: ['Ván cờ trước đã được khôi phục.' + (S.gameTitle ? ' (' + S.gameTitle + ')' : '')] };
+      S.pendingCoach = null;
       render();
       if (!checkOver()) { if (S.pos.side === S.userSide) startUserTurn(); else aiTurn(); }
       return true;
-    } catch (e) { return false; }
+    } catch (e) { S.startFen = null; S.gameTitle = null; return false; }
   }
 
   function checkOver() {
@@ -624,7 +727,7 @@
     save(); startUserTurn();
   }
   function rebuildPos() {
-    const p = Pos.start();
+    const p = startPos();
     for (const h of S.hist) { h.before = p.clone(); p.make(h.m); }
     S.pos = p;
   }
@@ -746,6 +849,7 @@
     html += c.lines.map((l) => `<p>${esc(l)}</p>`).join('');
     const op = c.opening && (typeof c.opening === 'string' ? { name: c.opening } : c.opening);
     if (op) html += `<div class="opening"><b>Khai cuộc: ${esc(op.name)}</b>${op.tip ? '<br>' + esc(op.tip) : ''}</div>`;
+    if (S.mode === 'play' && S.view < 0 && S.state === 'user' && S.hist.some((h) => h.by === 'user' && !h.cls)) html += `<div class="confirm"><button class="btn primary" data-act="analyze">Phân tích ván</button></div>`;
     if (c.confirm) html += `<div class="confirm"><button class="btn primary" data-act="undo-blunder">Đi lại nước này</button><button class="btn" data-act="keep-blunder">Vẫn đi</button></div>`;
     if (S.mode === 'puzzle') html += puzzleButtons();
     html += gmButtons();
@@ -830,6 +934,7 @@
       return;
     }
     if (S.view >= 0) t = 'Đang xem lại nước ' + (S.view + 1);
+    else if (S.state === 'analyze') t = 'Đang phân tích ván…';
     else if (S.state === 'over') t = S.result.text;
     else if (S.state === 'ai' && !S.drill) t = S.coach && S.coach.busy ? 'Thầy đang chấm nước của bạn…' : 'Máy đang nghĩ…';
     else if (S.state === 'confirm') t = 'Bạn có chắc muốn đi nước này?';
@@ -1303,6 +1408,18 @@
     $('gmGuess').classList.toggle('on', GM.guess);
     $('gmGuess').textContent = GM.guess ? 'Đang luyện đoán nước (' + sideName(GM.gside) + ')' : 'Luyện đoán nước';
   }
+  function gmPlay() {
+    const g = GM.game; if (!g) return;
+    const p = GM.start.clone(); for (let k = 0; k < GM.ply; k++) p.make(GM.moves[k]);
+    if (!p.legalMoves().length) { S.coach = { title: 'Ván đã kết thúc ở thế này', cls: null, lines: ['Hãy lùi về một thế cờ trước đó rồi bấm "Đánh tiếp với máy".'] }; render(); return; }
+    // cầm bên thắng trong ván gốc (hòa: bên đang tới lượt)
+    const side = g.res === 1 ? RED : g.res === -1 ? BLACK : p.side;
+    const res = g.res === 1 ? 'Đỏ thắng' : g.res === -1 ? 'Đen thắng' : g.res === 0 ? 'hòa' : '';
+    const lines = ['Bạn cầm ' + sideName(side) + (GM.ply ? ' từ nước ' + GM.ply : ' từ thế xuất phát') + ' của ván ' + (g.r ? g.r + ' – ' + g.b : '') + (res ? ' (kết quả gốc: ' + res + ')' : '') + '.'];
+    lines.push(g.res === (side === RED ? 1 : -1) ? 'Đại sư đã thắng từ thế này. Hãy thắng máy (cấp ' + S.level + ') để chứng tỏ bạn nắm được cách thắng.' : 'Hãy đánh tiếp và giữ thế cờ trước máy.');
+    lines.push('Mẹo: chọn cấp 4–5 trong "Đấu với máy" để máy chống trả mạnh nhất.');
+    playFrom({ fen: GM.start.toFen(), moves: GM.moves.slice(0, GM.ply), side, title: (GM.col.title || 'Ván đại sư') + ' · ván ' + (GM.gi + 1), lines });
+  }
   function gmButtons() {
     if (S.mode !== 'games' || !S.coach || !S.coach.gmNext) return '';
     return '<div class="confirm"><button class="btn primary" data-act="gm-next">Tiếp tục →</button></div>';
@@ -1353,6 +1470,8 @@
     else if (a === 'rv-del') deleteReview();
     else if (a === 'gm-next') { S.coach.gmNext = false; gmGoto(GM.ply + 1); }
     else if (a === 'gm-first') gmGoto(0);
+    else if (a === 'gm-play') gmPlay();
+    else if (a === 'analyze') analyzeGame();
     else if (a === 'gm-last') { GM.guess = false; S.userSide = RED; gmGoto(GM.moves.length); }
     else if (a === 'gm-guess') { GM.guess = !GM.guess; S.userSide = GM.guess ? GM.gside : RED; GM.stat = { ok: 0, near: 0, tot: 0 }; gmGoto(GM.guess ? 0 : GM.ply); }
     else if (a === 'gm-side') { GM.gside = -GM.gside; if (GM.guess) { S.userSide = GM.gside; GM.stat = { ok: 0, near: 0, tot: 0 }; gmGoto(0); } else gmShow(); }
@@ -1366,6 +1485,16 @@
   $('hintBtn').onclick = () => (S.mode === 'puzzle' ? puzzleHint() : S.mode === 'play' && S.drill ? S.state === 'user' && drillHint() : S.mode === 'games' ? (S.state === 'reveal' ? (S.coach.gmNext = false, gmGoto(GM.ply + 1)) : gmGoto(GM.ply + 1)) : showHint());
   $('undoBtn').onclick = () => (S.mode === 'puzzle' ? loadPuzzle(PZ.idx) : S.mode === 'games' ? gmGoto(GM.guess ? Math.max(0, GM.ply - 2) : GM.ply - 1) : undo());
   $('pzCol').onchange = (e) => openCollection(e.target.value, 0);
+  $('impBtn').onclick = () => {
+    if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi để nhập ván mới?')) return;
+    const err = importGame($('impText').value, $('impSide').value);
+    $('impErr').textContent = err || '';
+    if (!err) $('impText').value = '';
+  };
+  $('fenBtn').onclick = async () => {
+    const f = S.pos.toFen();
+    try { await navigator.clipboard.writeText(f); $('impErr').textContent = 'Đã chép FEN thế cờ hiện tại.'; } catch (e) { $('impText').value = f; }
+  };
   $('drillBtn').onclick = () => {
     if (S.drill) { S.tok++; stopDrill(true); return; }
     if (S.hist.length > 2 && !S.result && !confirm('Bỏ ván đang chơi để luyện khai cuộc?')) return;

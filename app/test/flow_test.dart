@@ -111,6 +111,46 @@ void main() {
     expect(g.hist.length, greaterThan(4));
   });
 
+  test('nhập ván, phân tích, nước sai vào sổ ôn', () async {
+    expect(g.importGame('1. C2.5 H8+7 2. R9+2', RED), isNull);
+    expect(g.gameTitle, 'Ván nhập vào');
+    expect(g.hist.where((h) => h.by == 'user').length, 2);
+    // máy đáp nước 2… rồi tới lượt người chơi
+    await waitFor(() => g.state == 'user' && g.hist.length == 4);
+    expect(g.canAnalyze, isTrue);
+    await g.analyzeGame();
+    await waitFor(() => g.state == 'user');
+    final mine = g.hist.where((h) => h.by == 'user').toList();
+    expect(mine.every((h) => h.cls != null), isTrue);
+    expect(mine[1].cls, isIn(['mistake', 'blunder'])); // Xe 9 tiến 2 để mất Mã
+    expect(g.reviews.map((c) => c.playedName), contains('Xe 9 tiến 2'));
+    expect(g.canAnalyze, isFalse);
+    expect(g.importGame('hello', RED), isNotNull);
+  });
+
+  test('đánh tiếp từ ván tàn cục đại sư, khôi phục khi mở lại', () async {
+    await g.setMode(Mode.games);
+    await g.gmOpenCol('dac-cap-dai-su-tan-cuc-tap-tuy-duong-dien-tru', 1);
+    final fen = g.gmGame!.fen!;
+    await g.gmPlay();
+    expect(g.mode, Mode.play);
+    expect(g.startFen, fen);
+    expect(g.userSide, g.gmGame!.res == -1 ? BLACK : RED);
+    await waitFor(() => g.state == 'user');
+    // mở lại app: ván tàn cục được khôi phục
+    final g2 = GameController(g.store);
+    await g2.init();
+    expect(g2.mode, Mode.play);
+    expect(g2.startFen, fen);
+    expect(g2.pos.toFen(), g.pos.toFen());
+    expect(g2.gameTitle, g.gameTitle);
+    g2.dispose();
+    // ván mới trở về thế ban đầu
+    g.newGame();
+    expect(g.startFen, isNull);
+    expect(g.pos.toFen(), Pos.start().toFen());
+  });
+
   test('sổ lỗi sai: lưu thẻ, làm sai rồi đúng, giãn lịch ôn', () async {
     var now = DateTime(2026, 1, 1).millisecondsSinceEpoch;
     g.clock = () => now;

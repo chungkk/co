@@ -5,6 +5,7 @@ Web tĩnh (HTML/CSS/JS thuần), deploy tại https://co.halle.biz qua Coolify t
 - `site/js/engine.js`: luật, sinh nước, alpha-beta
 - `site/js/worker.js`: tìm kiếm trong Web Worker
 - `site/js/app.js`: giao diện, gợi ý, chấm điểm, sách khai cuộc
+- `site/js/notation.js`: đọc FEN và biên bản nước đi (tiếng Việt, P2-5, WXF C2.5, chữ Hán 炮二平五) để nhập ván
 
 Chạy thử: `cd site && python3 -m http.server 8765`
 

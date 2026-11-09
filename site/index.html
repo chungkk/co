@@ -11,7 +11,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@700&text=%E5%B8%A5%E4%BB%95%E7%9B%B8%E5%82%8C%E4%BF%A5%E7%82%AE%E5%85%B5%E5%B0%87%E5%A3%AB%E8%B1%A1%E9%A6%AC%E8%BB%8A%E7%A0%B2%E5%8D%92%E6%A5%9A%E6%B2%B3%E6%BC%A2%E7%95%8C&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/style.css?v=7">
+<link rel="stylesheet" href="css/style.css?v=8">
 </head>
 <body>
 <header class="top">
@@ -91,6 +91,7 @@
         <button class="btn" data-act="gm-side" title="Đổi bên đoán">⇄ Bên</button>
         <button class="btn" data-act="gm-last" title="Cuối ván">⏭</button>
       </div>
+      <button class="btn full gm-play" data-act="gm-play" title="Chơi tiếp ván này với máy từ thế cờ đang xem">♟ Đánh tiếp với máy từ thế này</button>
       <input id="gmFilter" class="full" type="search" placeholder="Tìm theo tên kỳ thủ, khai cuộc…">
       <div id="gmList" class="gmlist"></div>
     </div>
@@ -98,6 +99,17 @@
       <div class="card-h">Nước đi <span class="muted small">bấm vào nước để xem lại</span></div>
       <div class="moves" id="moves"></div>
     </div>
+    <details class="card play-only imp">
+      <summary>Nhập ván / thế cờ của bạn</summary>
+      <p class="muted small">Dán FEN, biên bản nước đi (Pháo 2 bình 5…, P2-5…, C2.5…, 炮二平五…) hoặc FEN kèm nước đi. Sau đó đánh tiếp với máy hoặc bấm "Phân tích ván" để thầy chấm từng nước.</p>
+      <textarea id="impText" class="full" rows="4" placeholder="1. Pháo 2 bình 5  Mã 8 tiến 7&#10;2. Mã 2 tiến 3  Xe 9 bình 8 …"></textarea>
+      <div class="imp-row">
+        <label>Tôi cầm <select id="impSide"><option value="1">Đỏ</option><option value="-1">Đen</option><option value="move">Bên tới lượt</option></select></label>
+        <button class="btn primary" id="impBtn">Nhập</button>
+        <button class="btn" id="fenBtn" title="Chép FEN của thế cờ đang hiển thị">Chép FEN</button>
+      </div>
+      <p class="small" id="impErr" role="status"></p>
+    </details>
     <details class="card settings">
       <summary>Tùy chọn</summary>
       <label class="tog play-only"><input type="checkbox" id="optWarn"> Hỏi lại khi tôi đi nước hỏng</label>
@@ -112,6 +124,7 @@
 </footer>
 <script src="js/engine.js?v=3"></script>
 <script src="js/puzzles.js?v=1"></script>
-<script src="js/app.js?v=7"></script>
+<script src="js/notation.js?v=1"></script>
+<script src="js/app.js?v=8"></script>
 </body>
 </html>

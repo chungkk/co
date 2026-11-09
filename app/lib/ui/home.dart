@@ -225,6 +225,7 @@ class HomePage extends StatelessWidget {
     const SizedBox(height: 12),
     MovesCard(g: g),
     const SizedBox(height: 12),
+    if (g.mode == Mode.play) ...[ImportCard(g: g), const SizedBox(height: 12)],
     const Credits(),
   ];
 

@@ -11,6 +11,7 @@ import '../engine/engine.dart';
 import '../engine/engine_service.dart';
 import 'analysis.dart';
 import 'constants.dart';
+import 'notation.dart';
 
 enum Mode { play, puzzle, games }
 
@@ -111,6 +112,12 @@ class GameController extends ChangeNotifier {
   GameResult? result;
   int lastScore = 0;
   late Options opt;
+
+  /// null = thế ban đầu; khác: ván bắt đầu từ thế cờ này (tàn cục, ván nhập vào)
+  String? startFen;
+  String? gameTitle;
+  Coach? _pendingCoach;
+  Pos _startPos() => startFen != null ? Pos.fromFen(startFen!) : Pos.start();
 
   /// Tăng mỗi khi có nước đi mới, để bàn cờ biết khi nào cần chạy hiệu ứng.
   int moveSerial = 0;
@@ -264,7 +271,7 @@ class GameController extends ChangeNotifier {
         for (final x in pm)
           if (x.share >= 0.05 && x.n >= 10) x.m,
       ];
-    if (pro != null) return [];
+    if (pro != null || startFen != null) return [];
     if (names.length >= 10) return [];
     final legal = p.legalMoves(), out = <int>{};
     for (final line in smallBook) {
@@ -304,6 +311,7 @@ class GameController extends ChangeNotifier {
   }
 
   OpeningInfo? openingOf(List<String> names) {
+    if (startFen != null) return null;
     final e = _ecoOf();
     final old = _oldOpening(names);
     if (e != null) return OpeningInfo(e.name, old?.tip);
@@ -345,6 +353,8 @@ class GameController extends ChangeNotifier {
     final op = drillOps[k.clamp(0, drillOps.length - 1)];
     tok++;
     engine.reset();
+    startFen = null;
+    gameTitle = null;
     pos = Pos.start();
     hist = [];
     selected = -1;
@@ -359,7 +369,7 @@ class GameController extends ChangeNotifier {
       if (m == null) break;
       final before = pos.clone();
       pos.make(m);
-      hist.add(HistEntry(m, nm, before.side == userSide ? 'user' : 'ai', before));
+      hist.add(HistEntry(m, nm, 'ai', before)); // nước dựng sẵn của khai cuộc, không tính là nước của người chơi
     }
     drill = (name: op.name, ok: 0, tot: 0, fails: 0);
     coach = Coach(
@@ -506,11 +516,185 @@ class GameController extends ChangeNotifier {
     _continueGame();
   }
 
+  // ---------- Ván từ thế cờ bất kỳ: tàn cục đại sư, ván/thế cờ nhập vào ----------
+  /// Ghi ván vào bộ nhớ rồi chuyển sang chế độ đấu: _restore() dựng lại và cho máy/người đi tiếp.
+  /// [mine]: các nước có sẵn là của người chơi (ván nhập vào) hay của người khác (ván đại sư).
+  Future<void> playFrom({
+    String? fen,
+    required List<int> moves,
+    required int side,
+    String? title,
+    required List<String> lines,
+    bool mine = false,
+  }) async {
+    final p = fen != null ? Pos.fromFen(fen) : Pos.start();
+    final ms = <Map<String, dynamic>>[];
+    for (final m in moves) {
+      ms.add({'m': m, 'by': mine && p.side == side ? 'user' : 'ai'});
+      p.make(m);
+    }
+    store.set('game', {'side': side, 'fen': fen, 'title': title, 'moves': ms, 'hints': 0});
+    _pendingCoach = Coach(title ?? 'Ván mới từ thế cờ', lines: lines);
+    if (mode == Mode.play) {
+      tok++;
+      engine.reset();
+      if (!_restore()) newGame();
+    } else {
+      await setMode(Mode.play);
+    }
+  }
+
+  /// Nhập FEN/biên bản; trả về lời báo lỗi hoặc null. [side]: RED, BLACK hoặc 0 = bên tới lượt.
+  String? importGame(String text, int side) {
+    final r = parseImport(text);
+    if (r.err != null) return r.err;
+    final end = r.fen != null ? Pos.fromFen(r.fen!) : Pos.start();
+    for (final m in r.moves) {
+      end.make(m);
+    }
+    final s = side == 0 ? end.side : side;
+    playFrom(
+      fen: r.fen,
+      moves: r.moves,
+      side: s,
+      title: 'Ván nhập vào',
+      mine: true,
+      lines: [
+        r.moves.isNotEmpty
+            ? 'Đã nhập ${r.moves.length} nửa nước${r.fen != null ? ' từ thế cờ FEN' : ''}. Bạn cầm ${sideName(s)}.'
+            : 'Đã nhập thế cờ. Bạn cầm ${sideName(s)}.',
+        if (r.warn != null) '⚠️ ${r.warn}',
+        r.moves.isNotEmpty
+            ? 'Bấm "Phân tích ván" để thầy chấm từng nước của bạn; các nước sai sẽ vào sổ "Ôn lỗi sai". Hoặc cứ đánh tiếp với máy.'
+            : 'Đánh tiếp với máy từ thế này. Thầy chấm từng nước như bình thường.',
+      ],
+    );
+    return null;
+  }
+
+  /// FEN của thế cờ đang hiển thị
+  String get currentFen => shownPos.toFen();
+
+  /// Có nước của người chơi chưa được chấm (ván nhập vào)
+  bool get canAnalyze => mode == Mode.play && view < 0 && state == 'user' && hist.any((h) => h.by == 'user' && h.cls == null);
+
+  String _classify(int loss, bool isBest, bool isBook, int userScore, int bestScore) {
+    String c;
+    if (isBest) {
+      c = 'best';
+    } else if (isBook && loss <= 120) {
+      c = 'book';
+    } else if (loss <= 20) {
+      c = 'best';
+    } else if (loss <= 60) {
+      c = 'good';
+    } else if (loss <= 150) {
+      c = 'inacc';
+    } else if (loss <= 320) {
+      c = 'mistake';
+    } else {
+      c = 'blunder';
+    }
+    // đang thắng/thua quá rõ thì không bắt lỗi khắt khe
+    if (clampS(userScore) > 1500 && c != 'blunder' && !(bestScore > MATE - 500 && userScore < MATE - 500)) {
+      c = c == 'best' ? 'best' : 'good';
+    }
+    if (bestScore > MATE - 500 && userScore < MATE - 500 && c != 'blunder') c = 'mistake';
+    return c;
+  }
+
+  /// Chấm lại từng nước của người chơi trong ván (ván nhập vào chưa có điểm)
+  Future<void> analyzeGame() async {
+    final todo = hist.where((h) => h.by == 'user' && h.cls == null).toList();
+    if (todo.isEmpty) return;
+    final t = ++tok;
+    engine.reset();
+    state = 'analyze';
+    view = -1;
+    arrows = [];
+    var saved = 0;
+    for (var k = 0; k < todo.length; k++) {
+      final h = todo[k];
+      coach = Coach(
+        'Đang phân tích ván… ${k + 1}/${todo.length}',
+        busy: true,
+        lines: ['Máy chấm từng nước của bạn (khoảng 1 giây mỗi nước). Có thể chạm vào các nước đã chấm để xem.'],
+      );
+      _render();
+      final before = h.before, after = before.clone()..make(h.m);
+      final rb = await engine.search(before.clone(), const SearchOpts(timeMs: 700, multipv: 1));
+      if (t != tok || rb == null || rb.multi.isEmpty) return;
+      final best = rb.multi[0];
+      var userScore = best.score;
+      int? reply;
+      if (h.m != best.move) {
+        if (after.legalMoves().isEmpty) {
+          userScore = MATE - 1;
+        } else {
+          final ra = await engine.search(after.clone(), const SearchOpts(timeMs: 500, multipv: 1));
+          if (t != tok || ra == null) return;
+          userScore = ra.multi.isNotEmpty ? -ra.multi[0].score : 0;
+          reply = ra.multi.isNotEmpty ? ra.multi[0].move : null;
+        }
+      }
+      final loss = math.max(0, clampS(best.score) - clampS(userScore));
+      final pm = proMoves(before);
+      final bx = pm?.where((y) => y.m == h.m).firstOrNull;
+      final c = _classify(loss, h.m == best.move, bx != null && bx.share >= 0.05 && bx.n >= 10, userScore, best.score);
+      h.cls = c;
+      h.loss = loss;
+      h.acc = (100 * math.exp(-loss / 280)).round();
+      h.best = best.move;
+      h.bestName = before.moveName(best.move);
+      final lines = <String>[];
+      if (c == 'best' || c == 'book' || c == 'good') {
+        if (bx != null) lines.add('Nước của đại sư: ${fmtInt(bx.n)} ván (${pct(bx.share)}).');
+        lines.addAll(explain(before, h.m, score: userScore).map((x) => '• $x'));
+        if (c == 'good' && h.m != best.move) lines.add('Máy thích ${h.bestName} hơn một chút.');
+      } else {
+        lines.add('Bạn mất khoảng ${(loss / 100).toStringAsFixed(1)} Tốt lợi thế.');
+        if (reply != null && after.isLegal(reply)) {
+          lines.add('Vì đối phương có thể đáp ${after.moveName(reply)}: ${lc(explain(after, reply, short: true).join(' '))}');
+        }
+        lines.add('Nước tốt hơn: ${h.bestName}.');
+        if (pm != null && pm.isNotEmpty) lines.add('Đại sư thường đi: ${proLine(pm, 3)}.');
+        lines.addAll(explain(before, best.move, score: best.score).map((x) => '• $x'));
+        if ((c == 'mistake' || c == 'blunder') && addReview(before, h.m, best.move, loss)) saved++;
+      }
+      h.coach = SavedCoach('${cls[c]!.icon} ${h.name}: ${cls[c]!.label}', c, lines, null);
+      _save();
+    }
+    final mine = hist.where((h) => h.by == 'user' && h.cls != null).toList();
+    final cnt = <String, int>{};
+    var acc = 0;
+    for (final h in mine) {
+      cnt[h.cls!] = (cnt[h.cls!] ?? 0) + 1;
+      acc += h.acc ?? accOf[h.cls!]!;
+    }
+    final lines = [
+      'Độ chính xác của bạn: ${(acc / mine.length).round()}%',
+      cls.keys.where((k) => cnt[k] != null).map((k) => '${cls[k]!.icon} ${cls[k]!.short}: ${cnt[k]}').join(' · '),
+      'Chạm vào các nước đánh dấu ? hoặc ?? trong danh sách nước đi để xem nên đi thế nào.',
+      if (saved > 0) '📌 $saved thế cờ đi sai đã được lưu vào "Ôn lỗi sai của bạn" (tab Bài tập).',
+    ];
+    coach = Coach('Phân tích xong', lines: lines);
+    if (_checkOver()) {
+      coach = Coach('Phân tích xong', lines: [result!.text, ...lines]);
+      _render();
+    } else if (pos.side == userSide) {
+      _startUserTurn();
+    } else {
+      _aiTurn();
+    }
+  }
+
   // ---------- Luồng ván cờ ----------
   void _save() {
     if (mode != Mode.play) return;
     store.set('game', {
       'side': userSide,
+      'fen': startFen,
+      'title': gameTitle,
       'moves': [
         for (final h in hist) {'m': h.m, 'by': h.by, 'cls': h.cls, 'coach': h.coach?.toJson()},
       ],
@@ -522,6 +706,8 @@ class GameController extends ChangeNotifier {
     tok++;
     engine.reset();
     drill = null;
+    startFen = null;
+    gameTitle = null;
     if (!keepSide) userSide = store.get<int>('side', RED);
     pos = Pos.start();
     hist = [];
@@ -551,10 +737,12 @@ class GameController extends ChangeNotifier {
   bool _restore() {
     final g = store.get<Map<String, dynamic>?>('game', null);
     drill = null;
-    if (g == null || g['moves'] == null || (g['moves'] as List).isEmpty) return false;
+    if (g == null || g['moves'] == null || ((g['moves'] as List).isEmpty && g['fen'] == null)) return false;
     try {
       userSide = g['side'] as int;
-      final p = Pos.start();
+      startFen = g['fen'] as String?;
+      gameTitle = g['title'] as String?;
+      final p = _startPos();
       final h = <HistEntry>[];
       for (final e in g['moves'] as List) {
         final m = e['m'] as int;
@@ -571,7 +759,10 @@ class GameController extends ChangeNotifier {
       view = -1;
       result = null;
       moveSerial++;
-      coach = Coach('Tiếp tục ván cũ', lines: ['Ván cờ trước đã được khôi phục.']);
+      coach =
+          _pendingCoach ??
+          Coach('Tiếp tục ván cũ', lines: ['Ván cờ trước đã được khôi phục.${gameTitle != null ? ' ($gameTitle)' : ''}']);
+      _pendingCoach = null;
       _render();
       if (!_checkOver()) {
         if (pos.side == userSide) {
@@ -582,6 +773,8 @@ class GameController extends ChangeNotifier {
       }
       return true;
     } catch (_) {
+      startFen = null;
+      gameTitle = null;
       return false;
     }
   }
@@ -942,7 +1135,7 @@ class GameController extends ChangeNotifier {
   }
 
   void _rebuildPos() {
-    final p = Pos.start();
+    final p = _startPos();
     for (final h in hist) {
       h.before = p.clone();
       p.make(h.m);
@@ -1014,6 +1207,7 @@ class GameController extends ChangeNotifier {
       };
     }
     if (view >= 0) return 'Đang xem lại nước ${view + 1}';
+    if (state == 'analyze') return 'Đang phân tích ván…';
     if (state == 'over') return result?.text ?? '';
     if (drill != null && state == 'ai') return 'Máy đi theo đại sư…';
     if (state == 'ai') return coach != null && coach!.busy ? 'Thầy đang chấm nước của bạn…' : 'Máy đang nghĩ…';
@@ -1022,7 +1216,7 @@ class GameController extends ChangeNotifier {
     return pos.inCheck(pos.side) ? 'Bạn đang bị chiếu!' : 'Đến lượt bạn (${sideName(userSide)})';
   }
 
-  bool get statusThinking => state == 'ai' || state == 'demo';
+  bool get statusThinking => state == 'ai' || state == 'demo' || state == 'analyze';
   bool get statusAlert => mode == Mode.play && state == 'user' && view < 0 && pos.inCheck(pos.side);
 
   /// Thông tin hiển thị khi đang xem lại một nước
@@ -1856,6 +2050,43 @@ class GameController extends ChangeNotifier {
     lines.addAll(explain(before, master, score: sb).map((x) => '• $x'));
     coach = Coach('Đại sư đi $mname', cls: c, lines: lines, gmNext: true);
     _render();
+  }
+
+  /// Chơi tiếp với máy từ thế cờ đang xem của ván đại sư (cầm bên thắng trong ván gốc)
+  Future<void> gmPlay() async {
+    final g = gmGame;
+    if (g == null || _gmStart == null) return;
+    final p = _gmStart!.clone();
+    for (var k = 0; k < gmPly; k++) {
+      p.make(gmMoves[k]);
+    }
+    if (p.legalMoves().isEmpty) {
+      coach = Coach('Ván đã kết thúc ở thế này', lines: ['Hãy lùi về một thế cờ trước đó rồi bấm "Đánh tiếp với máy".']);
+      _render();
+      return;
+    }
+    final side = g.res == 1 ? RED : (g.res == -1 ? BLACK : p.side);
+    final res = switch (g.res) {
+      1 => 'Đỏ thắng',
+      -1 => 'Đen thắng',
+      0 => 'hòa',
+      _ => '',
+    };
+    final won = g.res == (side == RED ? 1 : -1);
+    await playFrom(
+      fen: _gmStart!.toFen(),
+      moves: gmMoves.sublist(0, gmPly),
+      side: side,
+      title: '${gmCol?.title ?? 'Ván đại sư'} · ván ${gmGi + 1}',
+      lines: [
+        'Bạn cầm ${sideName(side)}${gmPly > 0 ? ' từ nước $gmPly' : ' từ thế xuất phát'} của ván'
+            '${g.r != null ? ' ${g.r} – ${g.b}' : ''}${res.isNotEmpty ? ' (kết quả gốc: $res)' : ''}.',
+        won
+            ? 'Đại sư đã thắng từ thế này. Hãy thắng máy (cấp $level) để chứng tỏ bạn nắm được cách thắng.'
+            : 'Hãy đánh tiếp và giữ thế cờ trước máy.',
+        'Mẹo: chọn cấp 4–5 trong "Đấu với máy" để máy chống trả mạnh nhất.',
+      ],
+    );
   }
 
   void gmNext() {

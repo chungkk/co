@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../data/data.dart';
 import '../engine/engine.dart';
@@ -82,6 +83,9 @@ class CoachCard extends StatelessWidget {
       if (review && g.pzCur != null && (g.state == 'done' || g.state == 'fail')) {
         buttons.add(AppButton(label: 'Bỏ thẻ', compact: true, onPressed: g.deleteReview));
       }
+    }
+    if (g.canAnalyze && g.shownCoach == g.coach) {
+      buttons.add(AppButton(label: 'Phân tích ván', primary: true, compact: true, onPressed: g.analyzeGame));
     }
     if (g.mode == Mode.games && c.gmNext) {
       buttons.add(AppButton(label: 'Tiếp tục →', primary: true, compact: true, onPressed: g.gmNext));
@@ -697,6 +701,13 @@ class GamesCard extends StatelessWidget {
               ),
             ],
           ),
+          const SizedBox(height: 8),
+          AppButton(
+            label: 'Đánh tiếp với máy từ thế này',
+            icon: Icons.sports_esports_outlined,
+            compact: true,
+            onPressed: g.state == 'ai' ? null : g.gmPlay,
+          ),
         ],
       ),
     );
@@ -906,6 +917,116 @@ class _Badge extends StatelessWidget {
         cls[c]!.icon,
         textAlign: TextAlign.center,
         style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white, fontStyle: FontStyle.normal),
+      ),
+    );
+  }
+}
+
+// ---------- Nhập ván / thế cờ ----------
+class ImportCard extends StatefulWidget {
+  final GameController g;
+  const ImportCard({super.key, required this.g});
+  @override
+  State<ImportCard> createState() => _ImportCardState();
+}
+
+class _ImportCardState extends State<ImportCard> {
+  final _text = TextEditingController();
+  int _side = RED; // RED, BLACK hoặc 0 = bên tới lượt
+  String _msg = '';
+
+  @override
+  void dispose() {
+    _text.dispose();
+    super.dispose();
+  }
+
+  Future<void> _import() async {
+    final g = widget.g;
+    if (g.hist.length > 2 && g.result == null) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (c) => AlertDialog(
+          content: const Text('Bỏ ván đang chơi để nhập ván mới?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Thôi')),
+            TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('Nhập')),
+          ],
+        ),
+      );
+      if (ok != true) return;
+    }
+    final err = g.importGame(_text.text, _side);
+    setState(() => _msg = err ?? '');
+    if (err == null) _text.clear();
+  }
+
+  Future<void> _copyFen() async {
+    await Clipboard.setData(ClipboardData(text: widget.g.currentFen));
+    setState(() => _msg = 'Đã chép FEN thế cờ hiện tại.');
+  }
+
+  Future<void> _paste() async {
+    final d = await Clipboard.getData(Clipboard.kTextPlain);
+    if (d?.text != null) _text.text = d!.text!;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pal = context.pal;
+    const sides = [(RED, 'Đỏ', ''), (BLACK, 'Đen', ''), (0, 'Bên tới lượt', 'bên đi nước tiếp theo')];
+    return AppCard(
+      title: 'Nhập ván / thế cờ của bạn',
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Dán FEN, biên bản nước đi (Pháo 2 bình 5…, P2-5…, C2.5…, 炮二平五…) hoặc FEN kèm nước đi. '
+            'Sau đó đánh tiếp với máy hoặc bấm "Phân tích ván" để thầy chấm từng nước.',
+            style: _small(context),
+          ),
+          const SizedBox(height: 8),
+          TextField(
+            controller: _text,
+            minLines: 3,
+            maxLines: 6,
+            style: const TextStyle(fontSize: 13.5),
+            decoration: InputDecoration(
+              hintText: '1. Pháo 2 bình 5  Mã 8 tiến 7\n2. Mã 2 tiến 3  Xe 9 bình 8 …',
+              isDense: true,
+              filled: true,
+              fillColor: pal.surface2,
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide(color: pal.line)),
+              suffixIcon: IconButton(tooltip: 'Dán', icon: const Icon(Icons.content_paste, size: 18), onPressed: _paste),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: _SelectField(
+                  text: 'Tôi cầm: ${sides.firstWhere((x) => x.$1 == _side).$2}',
+                  onTap: () => showPickerSheet<int>(
+                    context,
+                    title: 'Tôi cầm quân',
+                    items: sides,
+                    selected: _side,
+                    onPick: (v) => setState(() => _side = v),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              AppButton(label: 'Nhập', primary: true, compact: true, onPressed: _import),
+              const SizedBox(width: 6),
+              AppButton(label: 'Chép FEN', compact: true, onPressed: _copyFen),
+            ],
+          ),
+          if (_msg.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(_msg, style: TextStyle(fontSize: 12.5, color: pal.forCls('mistake'))),
+            ),
+        ],
       ),
     );
   }
